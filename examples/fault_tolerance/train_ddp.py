@@ -16,7 +16,9 @@
 """
 Demo of fault tolerance with DDP training
 """
-
+import torch
+import torchvision.models as models
+from torch.profiler import profile, record_function, ProfilerActivity
 import argparse
 import logging
 import os
@@ -90,9 +92,9 @@ def parse_args():
                         help='Batch size')
     parser.add_argument('--epochs', type=int, default=4,
                         help='Number of training epochs')
-    parser.add_argument('--train_dataset_size', type=int, default=10000,
+    parser.add_argument('--train_dataset_size', type=int, default=1000,
                         help='Train dataset size')
-    parser.add_argument('--val_dataset_size', type=int, default=2000,
+    parser.add_argument('--val_dataset_size', type=int, default=200,
                         help='Validation dataset size')
     parser.add_argument('--device', type=str, default='cuda',
                         choices=['cpu', 'cuda'],
@@ -202,6 +204,8 @@ def training_loop(
     last_log_time = time.monotonic()
 
     for iter_idx, x in enumerate(dataloader, start=progress['iter_idx']):
+        #prof = profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA])
+        #prof.start()
         if ft_client.timeouts.are_valid is False and epoch_idx == 1 and iter_idx == 1:
             # after 0th epoch is completed and we've done 0th iteration of the 1st epoch,
             # we can calculate and set timeouts. this is a good moment to do so,
@@ -257,6 +261,9 @@ def training_loop(
         # the grads(?). could not reproduce the issue when runnig tests locally on a the cluster.
         # force ranks sync as a workaround.
         torch.distributed.barrier()
+        #prof.stop()
+        logging.info('Train loop finished, ret_code=0')
+        #prof.export_chrome_trace(f"/workspace/experiments/test/trace{iter_idx}.json")
 
 
 def validation_loop(ft_client, model, val_dataloader, epoch_idx, device):
@@ -511,6 +518,7 @@ def main():
     # Iteration over epochs, notice that it starts from 'epoch_idx'
     # which was previously loaded from the checkpoint
     for epoch_idx in range(progress['epoch_idx'], args.epochs):
+        
         training_loop(
             ft_client,
             para_model,
@@ -546,11 +554,12 @@ def main():
             break
 
         # Setup simulated fault as soon as we have valid timeouts
+        logging.info(f"{args.simulated_fault=} and not {_sim_fault_is_set=} and {ft_client.timeouts.are_valid=}")
         if args.simulated_fault and not _sim_fault_is_set and ft_client.timeouts.are_valid:
             _setup_simulated_fault(ft_client, args.simulated_fault, device)
+        
 
     _cancel_simulated_fault()
-    logging.info('Leaving main, ret_code=0')
     sys.exit(0)
 
 

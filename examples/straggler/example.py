@@ -85,18 +85,19 @@ def train(args) -> None:
     while epoch_num < args.num_epochs:
         for batch_idx, (data, target) in enumerate(loader):
             data, target = data.to(device), target.to(device)
-            output = ddp_model(data)
-            loss = loss_fn(output, target)
+            with straggler.Detector.detection_section():
+                output = ddp_model(data)
+                loss = loss_fn(output, target)
 
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
+                optim.zero_grad()
+                loss.backward()
+                optim.step()
             if batch_idx % 100 == 0:
                 print(
                     f"Rank {local_rank}, Epoch {epoch_num}, Batch {batch_idx}, Loss {loss.item()}"
                 )
-                report = straggler.Detector.generate_report(straggler.Statistic.MED)
-                print(f"Rank {local_rank} report: {report.performance_scores}")
+                report = straggler.Detector.generate_report() #straggler.Statistic.MED, straggler.Statistic.MED)
+                print(f"Rank {local_rank} report: {report}")
             total_iters_made += 1
         epoch_num += 1
     training_stop_time = time.monotonic()

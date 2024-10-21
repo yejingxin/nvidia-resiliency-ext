@@ -119,15 +119,6 @@ def main():
     if args.use_cupti:
         profiler = cupti_module.CuptiProfiler(bufferSize=1024 * 1024 * 8, numBuffers=10)
         profiler.initialize()
-
-    iters_finished_list.append(benchmark(args))
-
-    if args.use_cupti:
-        profiler.stop()
-
-    iters_finished_list.append(benchmark(args))
-
-    if args.use_cupti:
         profiler.start()
 
     iters_finished_list.append(benchmark(args))
@@ -143,7 +134,17 @@ def main():
     iters_finished_list.append(benchmark(args))
 
     if args.use_cupti:
-        stats = cupti_module.get_stats(profiler)  # Retrieve and print statistics
+        profiler.stop()
+
+    iters_finished_list.append(benchmark(args))
+
+    if args.use_cupti:
+        profiler.start()
+
+    iters_finished_list.append(benchmark(args))
+
+    if args.use_cupti:
+        stats = profiler.get_stats()  # Retrieve and print statistics
         for kernel_name, stats in stats.items():
             print(f"{kernel_name}: {stats}")
         profiler.shutdown()  # Clean up and flush CUPTI activities
