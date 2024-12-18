@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# mypy: ignore-errors
 
 # Copyright (c) Facebook, Inc. and its affiliates.
 # All rights reserved.
@@ -8,10 +8,7 @@
 
 # SPDX-License-Identifier: BSD-3-Clause
 # Modifications made by NVIDIA
-# - The following line is a Pyre fixme directive, and similar Pyre-related changes
-# - have been added throughout the file to address type inference issues:
-# - pyre-fixme[56]: Pyre was not able to infer the type of the decorator
-# - `fault_tolerance._torch_elastic_compat.metrics.prof`
+# All occurences of 'torch.distributed.elastic' were replaced with 'nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat'
 
 import abc
 import functools
@@ -27,23 +24,26 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.rendezvous as rdzv
+import nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.utils.store as store_util
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.rendezvous import RendezvousGracefulExitError
 from torch.distributed import Store
-
-from ... import rendezvous as rdzv
-from ...events import Event, EventSource, record
-from ...metrics import prof, put_metric
-from ...multiprocessing import ProcessFailure, SignalException, Std
-from ...utils import store as store_util
-from ...utils.logging import get_logger
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.events import Event, EventSource, record
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics import prof, put_metric
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.multiprocessing import (
+    ProcessFailure,
+    SignalException,
+)
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.utils.logging import get_logger
 
 __all__ = [
-    'WorkerSpec',
-    'Worker',
-    'WorkerState',
-    'WorkerGroup',
-    'RunResult',
-    'ElasticAgent',
-    'SimpleElasticAgent',
+    "WorkerSpec",
+    "Worker",
+    "WorkerState",
+    "WorkerGroup",
+    "RunResult",
+    "ElasticAgent",
+    "SimpleElasticAgent",
 ]
 _TERMINAL_STATE_SYNC_ID = "torchelastic/agent/terminal_state"
 
@@ -53,8 +53,8 @@ log = get_logger(__name__)
 
 @dataclass
 class WorkerSpec:
-    """
-    Contains blueprint information about a particular type of worker.
+    """Blueprint information about a particular type of worker.
+
     For a given role, there must only exist a single worker spec.
     Worker spec is expected to be homogeneous across all nodes (machine),
     that is each node runs the same number of workers for a particular spec.
@@ -93,8 +93,6 @@ class WorkerSpec:
     master_port: Optional[int] = None
     master_addr: Optional[str] = None
     local_addr: Optional[str] = None
-    redirects: Union[Std, Dict[int, Std]] = Std.NONE
-    tee: Union[Std, Dict[int, Std]] = Std.NONE
 
     def __post_init__(self):
         assert self.local_world_size > 0
@@ -102,15 +100,17 @@ class WorkerSpec:
 
         if self.fn:
             warnings.warn(
-                "WorkerSpec.fn will be deprecated," " please use WorkerSpec.entrypoint instead",
+                "WorkerSpec.fn will be deprecated,"
+                " please use WorkerSpec.entrypoint instead",
                 category=DeprecationWarning,
             )
             self.entrypoint = self.fn
         assert self.entrypoint
 
     def get_entrypoint_name(self):
-        """
-        If the entrypoint is a function (e.g. ``Callable``) returns its ``__qualname__``,
+        """Get the entry point name.
+
+        If the entrypoint is a function (e.g. ``Callable``) returns its ``__qualname__``
         else if the entrypoint is a binary (e.g. ``str``), returns the binary name.
         """
         if isinstance(self.entrypoint, str):
@@ -121,11 +121,11 @@ class WorkerSpec:
 
 
 class Worker:
-    """
-    Represents a worker instance. Contrast this with ``WorkerSpec`` that
-    represents the specifications of a worker. A ``Worker`` is created from
-    a ``WorkerSpec``. A ``Worker`` is to a ``WorkerSpec`` as an object is to
-    a class.
+    """A worker instance.
+
+    Contrast this with ``WorkerSpec`` that represents the specifications of a
+    worker. A ``Worker`` is created from a ``WorkerSpec``. A ``Worker`` is to
+    a ``WorkerSpec`` as an object is to a class.
 
     The ``id`` of the worker is interpreted
     by the specific implementation of ``ElasticAgent``. For a local
@@ -195,10 +195,10 @@ class Worker:
 
 
 class WorkerState(str, Enum):
-    """
-    State of the ``WorkerGroup``. Workers in a worker group change state as a unit.
-    If a single worker in a worker group fails the entire set is considered
-    failed::
+    """A state of the ``WorkerGroup``.
+
+    Workers in a worker group change state as a unit. If a single worker
+    in a worker group fails the entire set is considered failed::
 
       UNKNOWN - agent lost track of worker group state, unrecoverable
       INIT - worker group object created not yet started
@@ -239,7 +239,8 @@ class WorkerState(str, Enum):
 
     @staticmethod
     def is_running(state: "WorkerState") -> bool:
-        """
+        """Return the state of the Worker.
+
         Returns:
              True if the worker state represents workers still running
              (e.g. that the process exists but not necessarily healthy).
@@ -248,10 +249,10 @@ class WorkerState(str, Enum):
 
 
 class WorkerGroup:
-    """
-    Represents the set of ``Worker`` instances for the given ``WorkerSpec``
-    managed by ``ElasticAgent``. Whether the worker group contains cross
-    instance workers or not depends on the implementation of the agent.
+    """A set of ``Worker`` instances.
+
+    The class defines a set of ``Worker`` instances for the given ``WorkerSpec`` managed by ``ElasticAgent``. Whether the worker
+    group contains cross instance workers or not depends on the implementation of the agent.
     """
 
     __slots__ = ["spec", "workers", "store", "group_rank", "group_world_size", "state"]
@@ -269,8 +270,8 @@ class WorkerGroup:
 
 
 class _RoleInstanceInfo:
-    """
-    The class is used by the agent to exchange the information with other agents.
+    """The class is used by the agent to exchange the information with other agents.
+
     The information is used to determine the rank of the workers that agent
     manages in heterogeneous environments, where different agents can have
     different number of workers.
@@ -279,14 +280,13 @@ class _RoleInstanceInfo:
     __slots__ = ["role", "rank", "local_world_size"]
 
     def __init__(self, role: str, rank: int, local_world_size: int):
-        r"""
+        r"""Initialize the agent class instance.
 
         Args:
             role (str): user-defined role for the workers with this spec
             rank (int): the rank of the agent
             local_world_size (int): number of local workers to run
         """
-
         self.role = role
         self.rank = rank
         self.local_world_size = local_world_size
@@ -328,10 +328,10 @@ class _RoleInstanceInfo:
 
 @dataclass
 class RunResult:
-    """
-    Results returned by the worker executions. Run results follow an "all-or-nothing" policy
-    where the run is successful if and only if ALL local workers managed by this agent
-    complete successfully.
+    """Return results of the worker executions.
+
+    Run results follow an "all-or-nothing" policy where the run is successful if and
+    only if ALL local workers managed by this agent complete successfully.
 
     If the result is successful (e.g. ``is_failed() = False``) then the ``return_values``
     field contains the outputs (return values) of the workers managed by THIS agent mapped
@@ -361,12 +361,11 @@ class RunResult:
 
 
 def _get_socket_with_port() -> socket.socket:
-    """
-    Returns a free port on localhost that is "reserved" by binding a temporary
-    socket on it. Close the socket before passing the port to the entity
-    that requires it. Usage example
+    """Return a free port on localhost.
 
-    ::
+    The free port is "reserved" by binding a temporary socket on it.
+    Close the socket before passing the port to the entity that
+    requires it. Usage example::
 
     sock = _get_socket_with_port()
     with closing(sock):
@@ -376,7 +375,6 @@ def _get_socket_with_port() -> socket.socket:
         # may grab this port before func() runs
         func(port)
     """
-
     addrs = socket.getaddrinfo(
         host="localhost", port=None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM
     )
@@ -398,8 +396,8 @@ def _get_fq_hostname() -> str:
 
 
 class ElasticAgent(abc.ABC):
-    """
-    Agent process responsible for managing one or more worker processes.
+    """An agent process responsible for managing one or more worker processes.
+
     The worker processes are assumed to be regular distributed PyTorch scripts.
     When the worker process is created by the agent, the agent provides the
     necessary information for the worker processes to properly initialize
@@ -434,9 +432,9 @@ class ElasticAgent(abc.ABC):
 
     @abc.abstractmethod
     def run(self, role: str = DEFAULT_ROLE) -> RunResult:
-        """
-        Runs the agent, retrying the worker group on failures up to
-        ``max_restarts``.
+        """Run the agent.
+
+        Supports retrying the worker group on failures up to ``max_restarts``.
 
         Returns:
             The result of the execution, containing the return values or
@@ -449,21 +447,21 @@ class ElasticAgent(abc.ABC):
 
     @abc.abstractmethod
     def get_worker_group(self, role: str = DEFAULT_ROLE) -> WorkerGroup:
-        """
-        Returns:
-            The ``WorkerGroup`` for the given ``role``.
-            Note that the worker group is a mutable object and hence in a
-            multi-threaded/process environment it may change state.
-            Implementors are encouraged (but not required) to return
-            a defensive read-only copy.
+        """Return the ``WorkerGroup`` for the given ``role``.
+
+        Note that the worker group is a mutable object and hence in a
+        multi-threaded/process environment it may change state.
+        Implementors are encouraged (but not required) to return
+        a defensive read-only copy.
         """
         raise NotImplementedError()
 
 
 class SimpleElasticAgent(ElasticAgent):
-    """
-    An ``ElasticAgent`` that manages workers (``WorkerGroup``)
-    for a single ``WorkerSpec`` (e.g. one particular type of worker role).
+    """An ``ElasticAgent`` that manages one particular type of worker role.
+
+    An ``ElasticAgent`` that manages workers (``WorkerGroup``) for a single ``WorkerSpec``
+    such as one particular type of worker role.
     """
 
     def __init__(self, spec: WorkerSpec, exit_barrier_timeout: float = 300):
@@ -478,36 +476,34 @@ class SimpleElasticAgent(ElasticAgent):
 
     @abc.abstractmethod
     def _start_workers(self, worker_group: WorkerGroup) -> Dict[int, Any]:
-        r"""
-        Starts ``worker_group.spec.local_world_size`` number of workers
-        according to worker spec for the worker group .
+        r"""Start ``worker_group.spec.local_world_size`` number of workers.
 
+        This is according to worker spec for the worker group .
         Returns a map of ``local_rank`` to worker ``id``.
         """
         raise NotImplementedError()
 
     @abc.abstractmethod
     def _stop_workers(self, worker_group: WorkerGroup) -> None:
-        r"""
-        Stops all workers in the given worker group. Implementors
-        must deal with workers in all states defined by ``WorkerState``.
-        That is, it must gracefully handle stopping non-existent workers,
-        unhealthy (stuck) workers, etc.
+        r"""Stop all workers in the given worker group.
+
+        Implementors must deal with workers in all states defined by
+        ``WorkerState``. That is, it must gracefully handle stopping
+        non-existent workers, unhealthy (stuck) workers, etc.
         """
         raise NotImplementedError()
 
     @abc.abstractmethod
     def _monitor_workers(self, worker_group: WorkerGroup) -> RunResult:
-        r"""
-        Checks on the workers for the ``worker_group`` and returns
-        the new state of the worker group.
+        r"""Check on the workers for the ``worker_group``.
+
+        This function also returns the new state of the worker group.
         """
         raise NotImplementedError()
 
     @abc.abstractmethod
     def _shutdown(self, death_sig: signal.Signals = signal.SIGTERM) -> None:
-        """
-        Cleans up any resources that were allocated during the agent's work.
+        """Clean up any resources that were allocated during the agent's work.
 
         Args:
             death_sig: Signal to send to the child process, SIGTERM is default
@@ -543,15 +539,14 @@ class SimpleElasticAgent(ElasticAgent):
         return (master_addr, master_port)
 
     # pyre-fixme[56]: Pyre was not able to infer the type of the decorator
-    #  `fault_tolerance._torch_elastic_compat.metrics.prof`.
+    #  `nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics.prof`.
     @prof
     def _rendezvous(self, worker_group: WorkerGroup) -> None:
-        r"""
-        Runs rendezvous for the workers specified by worker spec.
+        r"""Run rendezvous for the workers specified by the worker spec.
+
         Assigns workers a new global rank and world size.
         Updates the rendezvous store for the worker group.
         """
-
         spec = worker_group.spec
 
         store, group_rank, group_world_size = spec.rdzv_handler.next_rendezvous()
@@ -597,8 +592,8 @@ class SimpleElasticAgent(ElasticAgent):
                 "role_ranks": [worker.role_rank for worker in workers],
                 "global_ranks": [worker.global_rank for worker in workers],
                 "role_world_sizes": [worker.role_world_size for worker in workers],
-                "global_world_sizes": [worker.world_size for worker in workers],
-            },
+                "global_world_sizes": [worker.world_size for worker in workers]
+            }
         )
 
     def _get_ranks(
@@ -622,14 +617,14 @@ class SimpleElasticAgent(ElasticAgent):
         )
 
     # pyre-fixme[56]: Pyre was not able to infer the type of the decorator
-    #  `fault_tolerance._torch_elastic_compat.metrics.prof`.
+    #  `nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics.prof`.
     @prof
     def _assign_worker_ranks(
         self, store, group_rank: int, group_world_size: int, spec: WorkerSpec
     ) -> List[Worker]:
-        """
-        Determines proper ranks for worker processes. The rank assignment
-        is done according to the following algorithm:
+        """Determine proper ranks for worker processes.
+
+        The rank assignment is done according to the following algorithm:
 
         1. Each agent writes its configuration(group_rank, group_world_size
            , num_workers) to the common store.
@@ -644,11 +639,12 @@ class SimpleElasticAgent(ElasticAgent):
            in the point 3 with the exception that the offset is done from the first
            agent that has the same role as current one and has the minimum group rank.
         """
-
         role_infos = self._share_and_gather(store, group_rank, group_world_size, spec)
         my_role_info = role_infos[group_rank]
         worker_world_size, worker_global_ranks = self._get_ranks(role_infos, group_rank)
-        role_infos = sorted(role_infos, key=functools.cmp_to_key(_RoleInstanceInfo.compare))
+        role_infos = sorted(
+            role_infos, key=functools.cmp_to_key(_RoleInstanceInfo.compare)
+        )
         role_start_idx, role_end_idx = _RoleInstanceInfo.find_role_boundaries(
             role_infos, my_role_info.role
         )
@@ -675,25 +671,27 @@ class SimpleElasticAgent(ElasticAgent):
     def _share_and_gather(
         self, store, group_rank: int, group_world_size: int, spec: WorkerSpec
     ) -> List:
-        agent_role_info = _RoleInstanceInfo(spec.role, group_rank, spec.local_world_size)
+        agent_role_info = _RoleInstanceInfo(
+            spec.role, group_rank, spec.local_world_size
+        )
         key_prefix = "torchelastic/role_info"
         agent_config_enc = agent_role_info.serialize()
         role_infos_bytes = store_util.synchronize(
             store, agent_config_enc, group_rank, group_world_size, key_prefix
         )
         role_infos = [
-            _RoleInstanceInfo.deserialize(role_info_bytes) for role_info_bytes in role_infos_bytes
+            _RoleInstanceInfo.deserialize(role_info_bytes)
+            for role_info_bytes in role_infos_bytes
         ]
         return role_infos
 
     # pyre-fixme[56]: Pyre was not able to infer the type of the decorator
-    #  `fault_tolerance._torch_elastic_compat.metrics.prof`.
+    #  `nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics.prof`.
     @prof
     def _initialize_workers(self, worker_group: WorkerGroup) -> None:
-        r"""
-        Starts a fresh set of workers for the worker_group.
-        Essentially a rendezvous followed by a start_workers.
+        r"""Start a fresh set of workers for the worker_group.
 
+        Essentially, a rendezvous followed by a ``start_workers``.
         The caller should first call ``_stop_workers()`` to stop running workers
         prior to calling this method.
 
@@ -719,13 +717,10 @@ class SimpleElasticAgent(ElasticAgent):
         worker_group.state = WorkerState.HEALTHY
 
     # pyre-fixme[56]: Pyre was not able to infer the type of the decorator
-    #  `fault_tolerance._torch_elastic_compat.metrics.prof`.
+    #  `nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics.prof`.
     @prof
     def _restart_workers(self, worker_group: WorkerGroup) -> None:
-        """
-        Restarts (stops, rendezvous, starts) all local workers in the group.
-        """
-
+        """Restart (stops, rendezvous, starts) all local workers in the group."""
         role = worker_group.spec.role
         log.info("[%s] Stopping worker group", role)
         self._stop_workers(worker_group)
@@ -733,7 +728,7 @@ class SimpleElasticAgent(ElasticAgent):
         self._initialize_workers(worker_group)
 
     # pyre-fixme[56]: Pyre was not able to infer the type of the decorator
-    #  `fault_tolerance._torch_elastic_compat.metrics.prof`.
+    #  `nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics.prof`.
     @prof
     def run(self, role: str = DEFAULT_ROLE) -> RunResult:
         start_time = time.monotonic()
@@ -744,6 +739,8 @@ class SimpleElasticAgent(ElasticAgent):
             self._record_metrics(result)
             self._record_worker_events(result)
             return result
+        except RendezvousGracefulExitError as e:
+            log.info("Rendezvous gracefully exited: %s", e)
         except SignalException as e:
             log.warning("Received %s death signal, shutting down workers", e.sigval)
             self._shutdown(e.sigval)
@@ -822,7 +819,9 @@ class SimpleElasticAgent(ElasticAgent):
             "metadata": md_str,
             "agent_restarts": spec.max_restarts - self._remaining_restarts,
         }
-        return Event(f"torchelastic.worker.status.{state}", source=source, metadata=metadata)
+        return Event(
+            f"torchelastic.worker.status.{state}", source=source, metadata=metadata
+        )
 
     def _record_metrics(self, group_results: RunResult):
         is_failed = group_results.is_failed()
@@ -855,7 +854,9 @@ class SimpleElasticAgent(ElasticAgent):
             flakiness = 100.0
         else:
             spec = self._worker_group.spec
-            flakiness = 100.0 - 100.0 * (self._remaining_restarts + 1) / (spec.max_restarts + 1)
+            flakiness = 100.0 - 100.0 * (self._remaining_restarts + 1) / (
+                spec.max_restarts + 1
+            )
         spec = self._worker_group.spec
 
         put_metric(f"workers.{spec.role}.flakiness", int(flakiness))
@@ -866,7 +867,9 @@ class SimpleElasticAgent(ElasticAgent):
         spec = self._worker_group.spec
         role = spec.role
 
-        log.info("[%s] starting workers for entrypoint: %s", role, spec.get_entrypoint_name())
+        log.info(
+            "[%s] starting workers for entrypoint: %s", role, spec.get_entrypoint_name()
+        )
 
         self._initialize_workers(self._worker_group)
         monitor_interval = spec.monitor_interval
@@ -886,8 +889,7 @@ class SimpleElasticAgent(ElasticAgent):
                 log.info(
                     "[%s] worker group successfully finished."
                     " Waiting %s seconds for other agents to finish.",
-                    role,
-                    self._exit_barrier_timeout,
+                    role, self._exit_barrier_timeout
                 )
                 self._exit_barrier()
                 return run_result
@@ -897,10 +899,7 @@ class SimpleElasticAgent(ElasticAgent):
                         "[%s] Worker group %s. "
                         "%s/%s attempts left;"
                         " will restart worker group",
-                        role,
-                        state.name,
-                        self._remaining_restarts,
-                        spec.max_restarts,
+                        role, state.name, self._remaining_restarts, spec.max_restarts
                     )
                     self._remaining_restarts -= 1
                     self._restart_workers(self._worker_group)
@@ -917,9 +916,7 @@ class SimpleElasticAgent(ElasticAgent):
                         "[%s] Detected %s "
                         "new nodes from group_rank=%s; "
                         "will restart worker group",
-                        role,
-                        num_nodes_waiting,
-                        group_rank,
+                        role, num_nodes_waiting, group_rank
                     )
                     self._restart_workers(self._worker_group)
             else:
@@ -927,15 +924,17 @@ class SimpleElasticAgent(ElasticAgent):
 
     def _exit_barrier(self):
         """
+        Define a barrier that keeps the agent process alive until all workers finish.
+
         Wait for ``exit_barrier_timeout`` seconds for all agents to finish
         executing their local workers (either successfully or not). This
         acts as a safety guard against user scripts that terminate at different
-        times. This barrier keeps the agent process alive until all workers finish.
+        times.
         """
         log.info(
-            "Local worker group finished (%s). " "Waiting %s seconds for other agents to finish",
-            self._worker_group.state,
-            self._exit_barrier_timeout,
+            "Local worker group finished (%s). "
+            "Waiting %s seconds for other agents to finish",
+            self._worker_group.state, self._exit_barrier_timeout
         )
         start = time.time()
         try:
@@ -946,9 +945,14 @@ class SimpleElasticAgent(ElasticAgent):
                 key_prefix=_TERMINAL_STATE_SYNC_ID,
                 barrier_timeout=self._exit_barrier_timeout,
             )
-            log.info("Done waiting for other agents. Elapsed: %s seconds", time.time() - start)
+            log.info(
+                "Done waiting for other agents. Elapsed: %s seconds", time.time() - start
+            )
         except SignalException as e:
             log.warning("Got termination signal: %s", e.sigval)
             raise
         except Exception:
-            log.exception("Error waiting on exit barrier. Elapsed: %s seconds", time.time() - start)
+            log.exception(
+                "Error waiting on exit barrier. Elapsed: %s seconds",
+                time.time() - start
+            )

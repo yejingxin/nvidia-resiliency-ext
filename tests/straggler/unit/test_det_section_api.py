@@ -20,8 +20,6 @@ import torch
 
 from nvidia_resiliency_ext import straggler
 
-pytestmark = pytest.mark.gpu
-
 
 @pytest.fixture
 def _straggler_init_shutdown():

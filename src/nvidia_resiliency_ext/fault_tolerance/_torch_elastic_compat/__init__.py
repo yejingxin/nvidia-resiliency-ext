@@ -8,7 +8,7 @@
 
 # SPDX-License-Identifier: BSD-3-Clause
 # Modifications made by NVIDIA
-# - This package is a copy of `torch.distributed.elastic` from PyTorch version 2.1.2
+# - This package is a copy of `torch.distributed.elastic` from PyTorch version 2.3
 # - All occurences of 'torch.distributed.elastic' were replaced with 'fault_tolerance._torch_elastic_compat'
 
 """

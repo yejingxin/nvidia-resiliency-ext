@@ -70,13 +70,9 @@ def _run_rank_monitors_fixture():
 
 
 def _rank_main(*args, rank_ready_events, **kwargs):
-    def _dummy_get_state():
-        return {"state": b"dummy"}
 
     rank_mon_cli = fault_tolerance.RankMonitorClient()
-    rank_mon_cli.init_workload_monitoring(
-        get_state_dict_cb=_dummy_get_state,
-    )
+    rank_mon_cli.init_workload_monitoring()
 
     # Capture FT termination signal, and exit with custom code
     def _sig_handler(*args, **kwargs):
@@ -89,9 +85,9 @@ def _rank_main(*args, rank_ready_events, **kwargs):
 
     # Infinite loop to simulate training
     while True:
-        time.sleep(0.1)  # simulate some work without params lock
-        with rank_mon_cli.get_parameters_update_section():
-            time.sleep(0.1)  # simulate params update
+        time.sleep(0.1)
+        rank_mon_cli.send_heartbeat()
+        time.sleep(0.1)
         try:
             torch.distributed.barrier()
         except Exception:

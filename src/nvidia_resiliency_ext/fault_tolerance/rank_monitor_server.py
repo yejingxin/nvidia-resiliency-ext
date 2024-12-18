@@ -28,8 +28,7 @@ import torch
 import torch.multiprocessing as mp
 
 from .config import FaultToleranceConfig
-from .data import AuthkeyMsg, GetCheckpointMsg, HeartbeatMsg, InitMsg, OkMsg, UpdateConfigMsg
-from .dict_utils import merge_state_dicts_
+from .data import AuthkeyMsg, HeartbeatMsg, InitMsg, OkMsg, UpdateConfigMsg
 from .utils import (
     create_logger,
     is_process_alive,
@@ -135,13 +134,8 @@ class RankMonitorServer:
 
     async def _handle_heartbeat_msg(self, msg, writer):
         self.last_hb_time = time.monotonic()
-        merge_state_dicts_(self.state_dict_for_chkpt, msg.state_dict_for_chkpt)
+        assert not msg.state_dict_for_chkpt, "state in heartbeat is not supported in this version"
         await write_obj_to_ipc_stream(OkMsg(), writer)
-
-    async def _handle_get_checkpoint_msg(self, msg, writer):
-        resp = OkMsg()
-        resp.state = self.state_dict_for_chkpt
-        await write_obj_to_ipc_stream(resp, writer)
 
     def _handle_ipc_connection_lost(self):
         self.rank_info = None
@@ -168,8 +162,6 @@ class RankMonitorServer:
                         await self._handle_init_msg(msg, writer)
                     elif isinstance(msg, HeartbeatMsg):
                         await self._handle_heartbeat_msg(msg, writer)
-                    elif isinstance(msg, GetCheckpointMsg):
-                        await self._handle_get_checkpoint_msg(msg, writer)
                     elif isinstance(msg, UpdateConfigMsg):
                         await self._handle_update_config_msg(msg, writer)
                     else:

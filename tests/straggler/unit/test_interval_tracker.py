@@ -15,12 +15,7 @@
 
 import time
 
-import pytest
-
 from nvidia_resiliency_ext.straggler import interval_tracker
-
-# FIXME: should work without GPU as well
-pytestmark = pytest.mark.gpu
 
 
 def test_estimate():

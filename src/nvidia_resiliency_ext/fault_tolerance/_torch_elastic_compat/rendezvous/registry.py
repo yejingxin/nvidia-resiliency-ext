@@ -6,15 +6,12 @@
 
 # SPDX-License-Identifier: BSD-3-Clause
 # Modifications made by NVIDIA
-# - This package is a copy of `torch.distributed.elastic` from PyTorch version 2.1.2
-# - All occurences of 'torch.distributed.elastic' were replaced with 'fault_tolerance._torch_elastic_compat'
-
+# All occurences of 'torch.distributed.elastic' were replaced with 'nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat'
 from .api import RendezvousHandler, RendezvousParameters
 from .api import rendezvous_handler_registry as handler_registry
 from .dynamic_rendezvous import create_handler
 
 __all__ = ['get_rendezvous_handler']
-
 
 def _create_static_handler(params: RendezvousParameters) -> RendezvousHandler:
     from . import static_tcp_rendezvous
@@ -53,13 +50,14 @@ def _register_default_handlers() -> None:
 
 def get_rendezvous_handler(params: RendezvousParameters) -> RendezvousHandler:
     """
-    This method is used to obtain a reference to a :py:class`RendezvousHandler`.
+    Obtain a reference to a :py:class`RendezvousHandler`.
+
     Custom rendezvous handlers can be registered by
 
     ::
 
-      from torch.distributed.elastid.rendezvous import rendezvous_handler_registry
-      from fault_tolerance._torch_elastic_compat.rendezvous.registry import get_rendezvous_handler
+      from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.rendezvous import rendezvous_handler_registry
+      from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.rendezvous.registry import get_rendezvous_handler
 
       def create_my_rdzv(params: RendezvousParameters):
         return MyCustomRdzv(params)

@@ -10,7 +10,13 @@ from typing import Optional, Tuple, cast
 
 import urllib3.exceptions  # type: ignore[import]
 from etcd import Client as EtcdClient  # type: ignore[import]
-from etcd import EtcdAlreadyExist, EtcdCompareFailed, EtcdException, EtcdKeyNotFound, EtcdResult
+from etcd import (
+    EtcdAlreadyExist,
+    EtcdCompareFailed,
+    EtcdException,
+    EtcdKeyNotFound,
+    EtcdResult,
+)
 from torch.distributed import Store
 
 from .api import RendezvousConnectionError, RendezvousParameters, RendezvousStateError
@@ -177,8 +183,7 @@ def _create_etcd_client(params: RendezvousParameters) -> EtcdClient:
 
 
 def create_backend(params: RendezvousParameters) -> Tuple[EtcdRendezvousBackend, Store]:
-    """Creates a new :py:class:`EtcdRendezvousBackend` from the specified
-    parameters.
+    """Create a new :py:class:`EtcdRendezvousBackend` from the specified parameters.
 
     +--------------+-----------------------------------------------------------+
     | Parameter    | Description                                               |

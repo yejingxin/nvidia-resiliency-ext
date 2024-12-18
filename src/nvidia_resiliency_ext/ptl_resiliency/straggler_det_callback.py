@@ -19,7 +19,15 @@ import time
 from typing import Optional
 
 import torch
-from pytorch_lightning.callbacks import Callback
+
+from ._utils import is_module_available
+
+if is_module_available("lightning"):
+    from lightning.pytorch.callbacks import Callback
+elif is_module_available("pytorch_lightning"):
+    from pytorch_lightning.callbacks import Callback
+else:
+    raise ImportError("Could not find 'lightning' or 'pytorch_lightning' module")
 
 import nvidia_resiliency_ext.straggler as straggler
 
@@ -36,6 +44,7 @@ class StragglerDetectionCallback(Callback):
         gpu_individual_perf_threshold: float,
         stop_if_detected: bool,
         enable_ptl_logging: bool,
+        profiling_interval: int = 1,
         logger_name: Optional[str] = "nemo_logger.StragglerDetectionCallback",
     ):
         """
@@ -50,6 +59,7 @@ class StragglerDetectionCallback(Callback):
             gpu_individual_perf_threshold (float): Threshold for individual GPU performance scores
             stop_if_detected (bool): Set to True, to terminate the workload if stragglers are detected
             enable_ptl_logging (bool): Set to True, to log GPU performance scores to all PTL loggers enabled through trainer
+            profiling_interval (int): `profiling_interval` passed to `straggler.Detector.initialize`. Defaults to 1.
             logger_name (Optional[str], optional): Defaults to "nemo_logger.StragglerDetectionCallback".
 
         Raises:
@@ -65,7 +75,7 @@ class StragglerDetectionCallback(Callback):
         self.gpu_individual_perf_threshold: float = gpu_individual_perf_threshold
         self.stop_if_detected: bool = stop_if_detected
         self.enable_ptl_logging: bool = enable_ptl_logging
-        self.profiling_interval: int = 1
+        self.profiling_interval: int = profiling_interval
         self.scores_to_compute = []
         if self.calc_relative_gpu_perf:
             self.scores_to_compute += ['relative_perf_scores']

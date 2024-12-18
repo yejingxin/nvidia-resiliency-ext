@@ -168,19 +168,6 @@ def save_checkpoint(
             torch.save(state, checkpoint_path)
 
 
-def make_get_rank_state_cb(progress, model, optimizer, ft_client, checkpoint_path):
-    def _get_state_cb():
-        return {
-            'checkpoint_path': checkpoint_path,
-            'progress': progress,
-            'model_state': model.state_dict(),
-            'optimizer_state': optimizer.state_dict(),
-            'ft_state': ft_client.state_dict(),
-        }
-
-    return _get_state_cb
-
-
 def training_loop(
     ft_client,
     para_model,
@@ -234,9 +221,8 @@ def training_loop(
 
         progress['iter_idx'] = iter_idx + 1
 
-        # NOTE: model is updated in a fault tolerance "parameters update section"
-        with ft_client.get_parameters_update_section():
-            optimizer.step()
+        ft_client.send_heartbeat()
+        optimizer.step()
 
         # Whether to do a periodic checkpointing
         periodic_save = iter_idx % args.save_interval == args.save_interval - 1
@@ -296,6 +282,7 @@ def _setup_simulated_fault(ft_client, fault_desc, device):
     # blocked when trying to receive the data in _on_ipc_data_from_rank
 
     global _sim_fault_is_set
+    _sim_fault_is_set = True  # should be True on all ranks
 
     rng = random.Random()
 
@@ -303,7 +290,7 @@ def _setup_simulated_fault(ft_client, fault_desc, device):
 
     fault_type = fault_desc['fault']
     if fault_type == 'random':
-        fault_type = rng.choice(['rank_killed', 'rank_hanged'])
+        fault_type = rng.choice(['rank_killed', 'rank_hung'])
 
     rank_to_fail = rng.randint(0, dist_utils.get_world_size() - 1)
     rank_to_fail = torch.tensor([rank_to_fail], device=device)
@@ -317,7 +304,7 @@ def _setup_simulated_fault(ft_client, fault_desc, device):
     if fault_type == 'rank_killed':
         target_pid = os.getpid()
         target_sig = signal.SIGKILL
-    elif fault_type == 'rank_hanged':
+    elif fault_type == 'rank_hung':
         target_pid = os.getpid()
         target_sig = signal.SIGSTOP
     else:
@@ -342,7 +329,6 @@ def _setup_simulated_fault(ft_client, fault_desc, device):
     fault_sim_thread = threading.Thread(target=__fault_thread)
     fault_sim_thread.daemon = True
     fault_sim_thread.start()
-    _sim_fault_is_set = True
 
 
 _signal_received = False
@@ -359,15 +345,6 @@ def main():
 
     args = parse_args()
 
-    # env var to set cublas in deterministic mode
-    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
-    # set PyTorch in deterministic mode, it's needed in this example to allow
-    # testing for bitwise accuracy, in real training workloads it's not necessary
-    torch.use_deterministic_algorithms(True)
-
-    # This example does not use randomization like
-    # dropout or dataset shuffle, but we need to set seeds
-    # so model weights are initialized to the same values
     torch.manual_seed(123)
     np.random.seed(123)
     random.seed(123)
@@ -442,29 +419,14 @@ def main():
 
     checkpoint_path = os.path.join(args.output_dir, args.checkpoint_fname)
 
-    # Initialize fault tolerance. provide callback that that collects current rank state,
-    # which is sent to the rank monitor in heartbeats.
+    # Initialize fault tolerance.
     ft_client = fault_tolerance.RankMonitorClient()
+    ft_client.init_workload_monitoring()
 
-    ft_client.init_workload_monitoring(
-        get_state_dict_cb=make_get_rank_state_cb(
-            progress,
-            model,
-            optimizer,
-            ft_client,
-            checkpoint_path,
-        ),
-    )
+    checkpoint = None
 
-    # Try to get in-memory checkpoint from RankMonitor
-    # all tensors should land on the same device from which they were snapshotted
-    checkpoint = ft_client.get_checkpoint_from_rmon()
-    if checkpoint:
-        logging.info('Checkpoint was obtained from Rank Monitor')
-        # torch.save(checkpoint, f"in-mem-rest-{rank}.pt")
-
-    # If there is no in-memory checkpoint, try to load from disk
-    if not checkpoint and os.path.exists(checkpoint_path):
+    # try to load checkpoint from disk
+    if os.path.exists(checkpoint_path):
         checkpoint = load_checkpoint(checkpoint_path)
         if checkpoint:
             logging.info(f'Checkpoint was loaded from file: {checkpoint_path}')
@@ -476,7 +438,7 @@ def main():
         progress.update(checkpoint['progress'])
         # Return with zero exit code if model is already fully trained.
         if progress['epoch_idx'] == args.epochs:
-            logging.info('Finished')
+            logging.info('Training finished.')
             sys.exit(0)
 
     train_dataloader = torch.utils.data.DataLoader(
@@ -549,7 +511,9 @@ def main():
             checkpoint_fname=args.checkpoint_fname,
         )
 
-        if _signal_received:
+        # NOTE: SIGTERM is used by SLURM to initiate graceful job termination
+        # if _any_ rank received SIGTERM, we leave the main loop
+        if dist_utils.is_true_on_any_rank(_signal_received):
             logging.info('Leaving the main loop, due to SIGTERM')
             break
 

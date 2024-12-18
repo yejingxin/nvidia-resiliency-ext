@@ -4,6 +4,10 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# SPDX-License-Identifier: BSD-3-Clause
+# Modifications made by NVIDIA
+# All occurences of 'torch.distributed.elastic' were replaced with 'nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat'
+
 import binascii
 import logging
 import os
@@ -13,8 +17,11 @@ from datetime import timedelta
 from typing import Any, Optional, Tuple, cast
 
 from torch.distributed import FileStore, Store, TCPStore
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.events import (
+    NodeState,
+    construct_and_record_rdzv_event,
+)
 
-from ..events import NodeState, construct_and_record_rdzv_event
 from .api import (
     RendezvousConnectionError,
     RendezvousError,
@@ -140,6 +147,8 @@ def _create_tcp_store(params: RendezvousParameters) -> TCPStore:
     else:
         is_host = _matches_machine_hostname(host)
 
+    use_libuv = params.get_as_bool("use_libuv", False)
+
     # The timeout
     read_timeout = cast(int, params.get_as_int("read_timeout", 60))
     if read_timeout <= 0:
@@ -150,7 +159,11 @@ def _create_tcp_store(params: RendezvousParameters) -> TCPStore:
     for is_server in [is_host, False]:
         try:
             store = TCPStore(
-                host, port, is_master=is_server, timeout=timedelta(seconds=read_timeout)
+                host,
+                port,
+                is_master=is_server,
+                timeout=timedelta(seconds=read_timeout),
+                use_libuv=use_libuv,
             )
 
             if is_server:
@@ -173,7 +186,7 @@ def _create_tcp_store(params: RendezvousParameters) -> TCPStore:
                     "The connection to the C10d store has failed. See inner exception for details."
                 ) from exc
 
-    return store
+    return store  # type: ignore[possibly-undefined]
 
 
 def _create_file_store(params: RendezvousParameters) -> FileStore:
@@ -201,8 +214,7 @@ def _create_file_store(params: RendezvousParameters) -> FileStore:
 
 
 def create_backend(params: RendezvousParameters) -> Tuple[C10dRendezvousBackend, Store]:
-    """Creates a new :py:class:`C10dRendezvousBackend` from the specified
-    parameters.
+    """Create a new :py:class:`C10dRendezvousBackend` from the specified parameters.
 
     +--------------+-----------------------------------------------------------+
     | Parameter    | Description                                               |

@@ -6,6 +6,10 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# SPDX-License-Identifier: BSD-3-Clause
+# Modifications made by NVIDIA
+# All occurences of 'torch.distributed.elastic' were replaced with 'nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat'
+
 """
 Each host in a distributed PyTorch job runs with a single TorchElastic agent,
 and multiple workers (as children processes of the TorchElastic agent).
@@ -37,7 +41,7 @@ Worker Failures are special because the exception/failure originates on a differ
 process from the agent so the error needs to be propagated inter-process
 (e.g. the agent cannot simply ``try-catch`` an exception raised on the worker process).
 
-TorchElastic agents use :func:`fault_tolerance._torch_elastic_compat.multiprocessing.start_processes`
+TorchElastic agents use :func:`nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.multiprocessing.start_processes`
 to launch the workers which has a simple file based inter-process error propagation
 built-in.
 
@@ -60,7 +64,8 @@ from functools import wraps
 from string import Template
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
-from ...utils.logging import get_logger
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.utils.logging import get_logger
+
 from .error_handler import ErrorHandler  # noqa: F401
 from .handlers import get_error_handler  # noqa: F401
 
@@ -80,8 +85,8 @@ T = TypeVar("T")
 @dataclass
 class ProcessFailure:
     """
-    Represents the failed process result. When the worker process fails,
-    it may record failure root cause into the file.
+    Represent the failed process result. When the worker process fails, it may record failure root cause into the file.
+
     Tries to read the failure timestamp from the provided ``error_file``,
     if the ``error_file`` does not exist, the timestamp is the current
     timestamp (seconds since epoch).
@@ -91,7 +96,7 @@ class ProcessFailure:
     Otherwise one is generated based on the failure signature.
 
     .. note:: It is assumed that the ``error_file`` is written by
-              ``fault_tolerance._torch_elastic_compat.multiprocessing.errors.error_handler.ErrorHandler``.
+              ``nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.multiprocessing.errors.error_handler.ErrorHandler``.
               Otherwise the behavior is undefined.
 
     """
@@ -111,10 +116,11 @@ class ProcessFailure:
                 with open(self.error_file) as fp:
                     self.error_file_data = json.load(fp)
                     log.debug(
-                        "User process failed with error data: %s",
-                        json.dumps(self.error_file_data, indent=2),
+                        "User process failed with error data: %s", json.dumps(self.error_file_data, indent=2)
                     )
-                    self.message, self.timestamp = self._get_error_data(self.error_file_data)
+                    self.message, self.timestamp = self._get_error_data(
+                        self.error_file_data
+                    )
             except Exception:
                 log.exception("Failed to parse reply file: %s", self.error_file)
                 raise
@@ -126,12 +132,11 @@ class ProcessFailure:
             # signals typically do not generate an error file message
             if self.exitcode < 0:
                 self.message = (
-                    f"Signal {-self.exitcode} ({self.signal_name()})" f" received by PID {self.pid}"
+                    f"Signal {-self.exitcode} ({self.signal_name()})"
+                    f" received by PID {self.pid}"
                 )
             else:
-                self.message = (
-                    "To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html"
-                )
+                self.message = "To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html"
 
     def _get_error_data(self, error_file_data: Dict[str, Any]) -> Tuple[str, int]:
         message = error_file_data["message"]
@@ -149,14 +154,17 @@ class ProcessFailure:
 
     def signal_name(self) -> str:
         if self.exitcode < 0:
-            return signal.Signals(-self.exitcode).name
+            # We don't want to kill the parent process trying to find the signal name.
+            # if the signal doesn't map to a known name, use not available.
+            try:
+                return signal.Signals(-self.exitcode).name
+            except Exception:
+                return _NOT_AVAILABLE
         else:
             return _NOT_AVAILABLE
 
     def timestamp_isoformat(self):
-        """
-        Returns timestamp in ISO format (YYYY-MM-DD_HH:MM:SS)
-        """
+        """Return timestamp in ISO format (YYYY-MM-DD_HH:MM:SS)."""
         return datetime.fromtimestamp(self.timestamp).isoformat(sep="_")
 
 
@@ -199,7 +207,6 @@ class ChildFailedError(Exception):
               support both function and binary launches.
 
     Example:
-
     ::
 
      # process tree on a host (container)
@@ -222,7 +229,9 @@ class ChildFailedError(Exception):
     def __init__(self, name: str, failures: Dict[GlobalRank, ProcessFailure]):
         self.name = name
         self.failures = failures
-        assert self.failures  # does not make sense to create a ChildFaileError with no failures
+        assert (
+            self.failures
+        )  # does not make sense to create a ChildFaileError with no failures
         super().__init__(self.format_msg())
 
     def get_first_failure(self) -> Tuple[GlobalRank, ProcessFailure]:
@@ -255,7 +264,9 @@ class ChildFailedError(Exception):
             other_failures="\n".join(other_failures_fmt or ["  <NO_OTHER_FAILURES>"]),
         )
 
-    def _format_failure(self, idx: int, rank: int, failure: ProcessFailure) -> Tuple[str, int]:
+    def _format_failure(
+        self, idx: int, rank: int, failure: ProcessFailure
+    ) -> Tuple[str, int]:
 
         # failure.message is either a str (when the failure does not generate a traceback - e.g. signals)
         # or a dict (json) of the form
@@ -290,7 +301,9 @@ class ChildFailedError(Exception):
         return fmt, width
 
 
-def record(fn: Callable[..., T], error_handler: Optional[ErrorHandler] = None) -> Callable[..., T]:
+def record(
+    fn: Callable[..., T], error_handler: Optional[ErrorHandler] = None
+) -> Callable[..., T]:
     """
     Syntactic sugar to record errors/exceptions that happened in the decorated
     function using the provided ``error_handler``.
@@ -326,7 +339,6 @@ def record(fn: Callable[..., T], error_handler: Optional[ErrorHandler] = None) -
         main()
 
     """
-
     if not error_handler:
         error_handler = get_error_handler()
 
@@ -337,6 +349,13 @@ def record(fn: Callable[..., T], error_handler: Optional[ErrorHandler] = None) -
             error_handler.initialize()
             try:
                 return f(*args, **kwargs)
+            except SystemExit as se:
+                # For run_path based entrypoints, SystemExit with code = 0 will never exit.
+                # Handling it here by returning a value:
+                if se.code == 0:
+                    return None
+                else:
+                    raise
             except ChildFailedError as e:
                 rank, failure = e.get_first_failure()
                 if failure.error_file != _NOT_AVAILABLE:
@@ -347,7 +366,7 @@ def record(fn: Callable[..., T], error_handler: Optional[ErrorHandler] = None) -
                             "local_rank %s FAILED with no error file."
                             " Decorate your entrypoint fn with @record for traceback info."
                             " See: https://pytorch.org/docs/stable/elastic/errors.html",
-                            rank,
+                            rank
                         )
                     )
                 raise

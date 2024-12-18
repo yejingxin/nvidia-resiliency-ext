@@ -14,10 +14,10 @@
 
 # fmt: off
 import contextlib
+import importlib.metadata as metadata
 import json
 import logging
 import os
-import shutil
 import signal
 import socket
 import sys
@@ -25,7 +25,8 @@ import tempfile
 import uuid
 from argparse import REMAINDER, ArgumentParser
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from string import Template
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union
 
 import torch
 from torch.distributed.argparse_util import check_env, env
@@ -40,8 +41,15 @@ from ._torch_elastic_compat.agent.server.api import (
 )
 from ._torch_elastic_compat.events.api import EventMetadataValue
 from ._torch_elastic_compat.metrics.api import prof
-from ._torch_elastic_compat.multiprocessing import PContext, SignalException, Std, start_processes
-from ._torch_elastic_compat.multiprocessing.errors import ChildFailedError
+from ._torch_elastic_compat.multiprocessing import (
+    DefaultLogsSpecs,
+    LogsSpecs,
+    PContext,
+    SignalException,
+    Std,
+    start_processes,
+)
+from ._torch_elastic_compat.multiprocessing.errors import ChildFailedError, record
 from ._torch_elastic_compat.rendezvous import RendezvousParameters
 from ._torch_elastic_compat.rendezvous import registry as rdzv_registry
 from ._torch_elastic_compat.rendezvous.utils import (
@@ -55,8 +63,6 @@ from .utils import terminate_mp_processes
 
 # fmt: on
 
-# Base PyTorch tag 2.1.2
-# TODO: reduce dependency on PyTorch internal APIs
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -96,13 +102,12 @@ class RankCachingRdzvHandlerWrapper:
 
 
 # LocalElasticAgent source
-# https://github.com/pytorch/pytorch/blob/v2.1.2/torch/distributed/elastic/agent/server/local_elastic_agent.py
+# https://github.com/pytorch/pytorch/blob/release/2.3/torch/distributed/elastic/agent/server/local_elastic_agent.py
 
 
 class LocalElasticAgent(SimpleElasticAgent):
-    """
-    An implementation of :py:class:`torchelastic.agent.server.ElasticAgent`
-    that handles host-local workers.
+    """An implementation of :py:class:`torchelastic.agent.server.ElasticAgent` that handles host-local workers.
+
     This agent is deployed per host and is configured to spawn ``n`` workers.
     When using GPUs, ``n`` maps to the number of GPUs available on the host.
 
@@ -134,6 +139,16 @@ class LocalElasticAgent(SimpleElasticAgent):
     variable ```TORCHELASTIC_TIMER_FILE```, and this environment variable will
     be propagated to the worker processes to allow them to connect to the same
     named pipe that ```LocalElasticAgent``` uses.
+
+    Logs are written to the specified log directory. Each log line will be by default
+    prefixed by ``[${role_name}${local_rank}]:`` (e.g. ``[trainer0]: foobar``).
+    Log prefixes can be customized by passing a `template string
+    <https://docs.python.org/3/library/string.html#template-strings>`_ as the
+    ``log_line_prefix_template`` argument.
+    The following macros (identifiers) are substituted at runtime:
+    ``${role_name}, ${local_rank}, ${rank}``. For example, to prefix each log line with
+    global rank instead of the local rank, set ``log_line_prefix_template = "[${rank}]:``.
+
 
     Example launching function
 
@@ -183,28 +198,23 @@ class LocalElasticAgent(SimpleElasticAgent):
         self,
         spec: WorkerSpec,
         fault_tol_cfg: FaultToleranceConfig,
+        logs_specs: LogsSpecs,
         start_method="spawn",
         exit_barrier_timeout: float = 300,
+        log_line_prefix_template: Optional[str] = None,
         term_timeout: float = 600,
-        log_dir: Optional[str] = None,
     ):
         super().__init__(spec, exit_barrier_timeout)
         self._start_method = start_method
         self._pcontext: Optional[PContext] = None
-        rdzv_run_id = spec.rdzv_handler.get_run_id()
-        self._log_dir = self._make_log_dir(log_dir, rdzv_run_id)
+        self._rdzv_handler = spec.rdzv_handler
+        self._log_line_prefix_template = log_line_prefix_template
         self._worker_watchdog: Optional[timer.FileTimerServer] = None
+        self._logs_specs = logs_specs
         self._term_timeout = term_timeout
         self._rank_to_rmon: Dict[int, Any] = dict()
         self._ft_cfg = fault_tol_cfg
         self._children_pgids: Set[int] = set()
-
-    def _make_log_dir(self, log_dir: Optional[str], rdzv_run_id: str):
-        base_log_dir = log_dir or tempfile.mkdtemp(prefix="torchelastic_")
-        os.makedirs(base_log_dir, exist_ok=True)
-        dir = tempfile.mkdtemp(prefix=f"{rdzv_run_id}_", dir=base_log_dir)
-        logger.info("log directory set to: %s", dir)
-        return dir
 
     def setup_rank_monitors(self, envs: Dict[int, Dict[str, str]]) -> None:
         spawn_mp_ctx = torch.multiprocessing.get_context("spawn")
@@ -297,13 +307,13 @@ class LocalElasticAgent(SimpleElasticAgent):
         events.record(event)
 
     # pyre-fixme[56]: Pyre was not able to infer the type of the decorator
-    #  `fault_tolerance._torch_elastic_compat.metrics.prof`.
+    #  `torch.distributed.elastic.metrics.prof`.
     @prof
     def _stop_workers(self, worker_group: WorkerGroup) -> None:
         self._shutdown()
 
     # pyre-fixme[56]: Pyre was not able to infer the type of the decorator
-    #  `fault_tolerance._torch_elastic_compat.metrics.prof`.
+    #  `torch.distributed.elastic.metrics.prof`.
     @prof
     def _start_workers(self, worker_group: WorkerGroup) -> Dict[int, Any]:
         spec = worker_group.spec
@@ -316,6 +326,7 @@ class LocalElasticAgent(SimpleElasticAgent):
 
         args: Dict[int, Tuple] = {}
         envs: Dict[int, Dict[str, str]] = {}
+        log_line_prefixes: Optional[Dict[int, str]] = {} if self._log_line_prefix_template else None
         for worker in worker_group.workers:
             local_rank = worker.local_rank
             worker_env = {
@@ -341,31 +352,33 @@ class LocalElasticAgent(SimpleElasticAgent):
             if "OMP_NUM_THREADS" in os.environ:
                 worker_env["OMP_NUM_THREADS"] = os.environ["OMP_NUM_THREADS"]
 
+            if self._log_line_prefix_template:
+                log_line_prefix = Template(self._log_line_prefix_template).safe_substitute(
+                    role_name=spec.role,
+                    rank=worker.global_rank,
+                    local_rank=local_rank,
+                )
+                log_line_prefixes[local_rank] = log_line_prefix
+
             envs[local_rank] = worker_env
             worker_args = list(spec.args)
             worker_args = macros.substitute(worker_args, str(local_rank))
             args[local_rank] = tuple(worker_args)
-
-        # scaling events do not count towards restarts (gets same attempt #)
-        # remove existing log dir if this restart is due to a scaling event
-        attempt_log_dir = os.path.join(self._log_dir, f"attempt_{restart_count}")
-        shutil.rmtree(attempt_log_dir, ignore_errors=True)
-        os.makedirs(attempt_log_dir)
 
         self._setup_local_watchdog(envs=envs)
 
         self.setup_rank_monitors(envs=envs)
 
         assert spec.entrypoint is not None
+        assert self._logs_specs is not None
         self._pcontext = start_processes(
             name=spec.role,
             entrypoint=spec.entrypoint,
             args=args,
             envs=envs,
-            log_dir=attempt_log_dir,
+            logs_specs=self._logs_specs,
+            log_line_prefixes=log_line_prefixes,
             start_method=self._start_method,
-            redirects=spec.redirects,
-            tee=spec.tee,
         )
 
         self._patch_pcontext_close(self._pcontext)
@@ -395,7 +408,7 @@ class LocalElasticAgent(SimpleElasticAgent):
             terminate_mp_processes(allowed_ppids={1}, allowed_pgids=self._children_pgids)
 
     # pyre-fixme[56]: Pyre was not able to infer the type of the decorator
-    #  `fault_tolerance._torch_elastic_compat.metrics.prof`.
+    #  `torch.distributed.elastic.metrics.prof`.
     @prof
     def _monitor_workers(self, worker_group: WorkerGroup) -> RunResult:
         role = worker_group.spec.role
@@ -444,7 +457,7 @@ class LocalElasticAgent(SimpleElasticAgent):
 
 
 # Source
-# https://github.com/pytorch/pytorch/blob/v2.1.2/torch/distributed/launcher/api.py
+# https://github.com/pytorch/pytorch/blob/release/2.3/torch/distributed/launcher/api.py
 
 
 @dataclass
@@ -476,15 +489,10 @@ class LaunchConfig:
                         as a period of monitoring workers.
         start_method: The method is used by the elastic agent to start the
                     workers (spawn, fork, forkserver).
-        log_dir: base log directory where log files are written. If not set,
-                one is created in a tmp dir but NOT removed on exit.
-        redirects: configuration to redirect stdout/stderr to log files.
-                Pass a single ``Std`` enum to redirect all workers,
-                or a mapping keyed by local_rank to selectively redirect.
-        tee: configuration to "tee" stdout/stderr to console + log file.
         metrics_cfg: configuration to initialize metrics.
         local_addr: address of the local node if any. If not set, a lookup on the local
                 machine's FQDN will be performed.
+        local_ranks_filter: ranks for which to show logs in console. If not set, show from all.
     ..note:
         `rdzv_timeout` is a legacy argument that will be removed in future.
         Set the timeout via `rdzv_configs['timeout']`
@@ -495,6 +503,7 @@ class LaunchConfig:
     max_nodes: int
     nproc_per_node: int
     fault_tol_cfg: FaultToleranceConfig
+    logs_specs: Optional[LogsSpecs] = None
     run_id: str = ""
     role: str = "default_role"
     rdzv_endpoint: str = ""
@@ -505,9 +514,7 @@ class LaunchConfig:
     term_timeout: float = 600
     monitor_interval: float = 30
     start_method: str = "spawn"
-    log_dir: Optional[str] = None
-    redirects: Union[Std, Dict[int, Std]] = Std.NONE
-    tee: Union[Std, Dict[int, Std]] = Std.NONE
+    log_line_prefix_template: Optional[str] = None
     metrics_cfg: Dict[str, str] = field(default_factory=dict)
     local_addr: Optional[str] = None
 
@@ -524,6 +531,10 @@ class LaunchConfig:
             self.rdzv_configs["close_timeout"] = 600  # default is 30 seconds
         if "read_timeout" not in self.rdzv_configs:
             self.rdzv_configs["read_timeout"] = 600  # default is 60 seconds
+
+        # Post-processing to enable refactoring to introduce logs_specs due to non-torchrun API usage
+        if self.logs_specs is None:
+            self.logs_specs = DefaultLogsSpecs()
 
 
 class elastic_launch:
@@ -639,7 +650,7 @@ def launch_agent(
             "rdzv_configs": config.rdzv_configs,
             "max_restarts": config.max_restarts,
             "monitor_interval": config.monitor_interval,
-            "log_dir": config.log_dir,
+            "log_dir": config.logs_specs.root_log_dir,  # type: ignore[union-attr]
             "metrics_cfg": config.metrics_cfg,
         },
     )
@@ -664,11 +675,9 @@ def launch_agent(
         local_world_size=config.nproc_per_node,
         entrypoint=entrypoint,
         args=tuple(args),
-        rdzv_handler=wrapped_rdzv_handler,
+        rdzv_handler=rdzv_registry.get_rendezvous_handler(rdzv_parameters),
         max_restarts=config.max_restarts,
         monitor_interval=config.monitor_interval,
-        redirects=config.redirects,
-        tee=config.tee,
         master_addr=master_addr,
         master_port=master_port,
         local_addr=config.local_addr,
@@ -677,8 +686,9 @@ def launch_agent(
     agent = LocalElasticAgent(
         spec=spec,
         fault_tol_cfg=config.fault_tol_cfg,
+        logs_specs=config.logs_specs,  # type: ignore[arg-type]
         start_method=config.start_method,
-        log_dir=config.log_dir,
+        log_line_prefix_template=config.log_line_prefix_template,
         term_timeout=config.term_timeout,
     )
 
@@ -727,9 +737,11 @@ def launch_agent(
 
 
 # Source
-# https://github.com/pytorch/pytorch/blob/v2.1.2/torch/distributed/run.py
+# https://github.com/pytorch/pytorch/blob/release/2.3/torch/distributed/run.py
 
 """
+Superset of ``torch.distributed.launch``.
+
 ``torchrun`` provides a superset of the functionality as ``torch.distributed.launch``
 with the following additional functionalities:
 
@@ -749,7 +761,7 @@ with the following additional functionalities:
 
 
 Transitioning from torch.distributed.launch to torchrun
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
 ``torchrun`` supports the same arguments as ``torch.distributed.launch`` **except**
@@ -881,7 +893,7 @@ For multi-node training you need to specify:
 
 1. ``--rdzv-id``: A unique job id (shared by all nodes participating in the job)
 2. ``--rdzv-backend``: An implementation of
-   :py:class:`fault_tolerance._torch_elastic_compat.rendezvous.RendezvousHandler`
+   :py:class:`torch.distributed.elastic.rendezvous.RendezvousHandler`
 3. ``--rdzv-endpoint``: The endpoint where the rendezvous backend is running; usually in form
    ``host:port``.
 
@@ -1081,7 +1093,7 @@ utility
 
 ::
 
-  from fault_tolerance._torch_elastic_compat.multiprocessing.errors import record
+  from torch.distributed.elastic.multiprocessing.errors import record
 
   @record
   def main():
@@ -1095,8 +1107,7 @@ utility
 
 
 def get_args_parser() -> ArgumentParser:
-    """Helper function parsing the command line options."""
-
+    """Parse the command line options."""
     parser = ArgumentParser(description="Torch Distributed Elastic Training Launcher")
 
     #
@@ -1176,7 +1187,6 @@ def get_args_parser() -> ArgumentParser:
         default=0,
         help="Maximum number of worker group restarts before failing.",
     )
-
     # this param is added for fault tolerance
     parser.add_argument(
         "--term-timeout",
@@ -1262,6 +1272,17 @@ def get_args_parser() -> ArgumentParser:
         help="Tee std streams into a log file and also to console (see --redirects for format).",
     )
 
+    parser.add_argument(
+        "--local-ranks-filter",
+        "--local_ranks_filter",
+        action=env,
+        type=str,
+        default="",
+        help="Only show logs from specified ranks in console (e.g. [--local_ranks_filter=0,1,2] will "
+        "only show logs from rank 0, 1 and 2). This will only apply to stdout and stderr, not to"
+        "log files saved via --redirect or --tee",
+    )
+
     #
     # Backwards compatible parameters with caffe2.distributed.launch.
     #
@@ -1303,6 +1324,15 @@ def get_args_parser() -> ArgumentParser:
         help="Address of the local node. If specified, will use the given address for connection. "
         "Else, will look up the local node address instead. Else, it will be default to local "
         "machine's FQDN.",
+    )
+
+    parser.add_argument(
+        "--logs-specs",
+        "--logs_specs",
+        default=None,
+        type=str,
+        help="torchrun.logs_specs group entrypoint name, value must be type of LogsSpecs. "
+        "Can be used to override custom logging behavior.",
     )
 
     #
@@ -1404,7 +1434,7 @@ def parse_min_max_nnodes(nnodes: str):
         min_nodes = int(arr[0])
         max_nodes = int(arr[1])
     else:
-        raise RuntimeError(f'nnodes={nnodes} is not in "MIN:MAX" format')
+        raise RuntimeError(f'nnodes={nnodes} is not in "MIN:MAX" format')  # noqa: E231
 
     return min_nodes, max_nodes
 
@@ -1437,13 +1467,13 @@ def determine_local_world_size(nproc_per_node: str):
 
 def get_rdzv_endpoint(args):
     if args.rdzv_backend == "static" and not args.rdzv_endpoint:
-        return f"{args.master_addr}:{args.master_port}"
+        return f"{args.master_addr}:{args.master_port}"  # noqa: E231
     return args.rdzv_endpoint
 
 
 def get_use_env(args) -> bool:
     """
-    Retrieves ``use_env`` from the args.
+    Retrieve ``use_env`` from the args.
     ``use_env`` is a legacy argument, if ``use_env`` is False, the
     ``--node-rank`` argument will be transferred to all worker processes.
     ``use_env`` is only used by the ``torch.distributed.launch`` and will
@@ -1454,20 +1484,45 @@ def get_use_env(args) -> bool:
     return args.use_env
 
 
-def config_from_args(
-    args,
-) -> Tuple[LaunchConfig, Union[Callable, str], List[str]]:
+def _get_logs_specs_class(logs_specs_name: Optional[str]) -> Type[LogsSpecs]:
+    """
+    Attemps to load `torchrun.logs_spec` entrypoint with key of `logs_specs_name` param.
+    Provides plugin mechanism to provide custom implementation of LogsSpecs.
+
+    Returns `DefaultLogsSpecs` when logs_spec_name is None.
+    Raises ValueError when entrypoint for `logs_spec_name` can't be found in entrypoints.
+    """
+    logs_specs_cls = None
+    if logs_specs_name is not None:
+        eps = metadata.entry_points()
+        if hasattr(eps, "select"):  # >= 3.10
+            group = eps.select(group="torchrun.logs_specs")
+            if group.select(name=logs_specs_name):
+                logs_specs_cls = group[logs_specs_name].load()
+
+        elif specs := eps.get("torchrun.logs_specs"):  # < 3.10
+            if entrypoint_list := [ep for ep in specs if ep.name == logs_specs_name]:
+                logs_specs_cls = entrypoint_list[0].load()
+
+        if logs_specs_cls is None:
+            raise ValueError(
+                f"Could not find entrypoint under 'torchrun.logs_specs[{logs_specs_name}]' key"
+            )
+
+        logging.info("Using logs_spec '%s' mapped to %s", logs_specs_name, str(logs_specs_cls))
+    else:
+        logs_specs_cls = DefaultLogsSpecs
+
+    return logs_specs_cls
+
+
+def config_from_args(args) -> Tuple[LaunchConfig, Union[Callable, str], List[str]]:
     # If ``args`` not passed, defaults to ``sys.argv[:1]``
     min_nodes, max_nodes = parse_min_max_nnodes(args.nnodes)
     assert 0 < min_nodes <= max_nodes
     assert args.max_restarts >= 0
 
-    if min_nodes != max_nodes:
-        raise ValueError(
-            "FT launcher does not support elasticity. min_nodes should be equal to max_nodes."
-        )
-
-    if hasattr(args, "master_addr") and args.rdzv_backend != "static":
+    if hasattr(args, "master_addr") and args.rdzv_backend != "static" and not args.rdzv_endpoint:
         logger.warning(
             "master_addr is only used for static rdzv_backend and when rdzv_endpoint "
             "is not specified."
@@ -1487,6 +1542,8 @@ def config_from_args(
         )
         # This env variable will be passed down to the subprocesses
         os.environ["OMP_NUM_THREADS"] = str(omp_num_threads)
+
+    log_line_prefix_template = os.getenv("TORCHELASTIC_LOG_LINE_PREFIX_TEMPLATE")
 
     rdzv_configs = _parse_rendezvous_config(args.rdzv_conf)
 
@@ -1510,6 +1567,24 @@ def config_from_args(
         else:
             raise ValueError("Fault Tolerance configuration not provided.")
 
+    ranks: Optional[Set[int]] = None
+    if args.local_ranks_filter:
+        try:
+            ranks = set(map(int, args.local_ranks_filter.split(",")))
+            assert ranks
+        except Exception as e:
+            raise Exception(
+                "--local_ranks_filter must be a comma-separated list of integers e.g. --local_ranks_filter=0,1,2"
+            ) from e
+
+    logs_specs_cls: Type[LogsSpecs] = _get_logs_specs_class(args.logs_specs)
+    logs_specs = logs_specs_cls(
+        log_dir=args.log_dir,
+        redirects=Std.from_str(args.redirects),
+        tee=Std.from_str(args.tee),
+        local_ranks_filter=ranks,
+    )
+
     config = LaunchConfig(
         min_nodes=min_nodes,
         max_nodes=max_nodes,
@@ -1523,10 +1598,9 @@ def config_from_args(
         term_timeout=args.term_timeout,
         monitor_interval=args.monitor_interval,
         start_method=args.start_method,
-        redirects=Std.from_str(args.redirects),
-        tee=Std.from_str(args.tee),
-        log_dir=args.log_dir,
+        log_line_prefix_template=log_line_prefix_template,
         local_addr=args.local_addr,
+        logs_specs=logs_specs,
         fault_tol_cfg=fault_tol_cfg,
     )
 
@@ -1560,7 +1634,8 @@ def config_from_args(
 
 def run_script_path(training_script: str, *training_script_args: str):
     """
-    Runs the provided `training_script` from within this interpreter.
+    Run the provided `training_script` from within this interpreter.
+
     Usage: `script_as_function("/abs/path/to/script.py", "--arg1", "val1")`
     """
     import runpy
@@ -1594,12 +1669,13 @@ def run(args):
     )(*cmd_args)
 
 
+@record
 def main(args=None):
     args = parse_args(args)
     try:
         run(args)
     except ChildFailedError as e:
-        # log info on failed ranks in a compact form
+        # logger.info on failed ranks in a compact form
         logger.error(f"Some rank(s) exited with non-zero exit code: {e.failures}")
         sys.exit(1)
 

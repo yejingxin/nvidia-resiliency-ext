@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 
 def get_libc():
     if IS_WINDOWS or IS_MACOS:
-        logger.warning("NOTE: Redirects are currently not supported in Windows or MacOs.")
+        logger.warning(
+            "NOTE: Redirects are currently not supported in Windows or MacOs."
+        )
         return None
     else:
         return ctypes.CDLL("libc.so.6")
@@ -47,9 +49,9 @@ _VALID_STD = {"stdout", "stderr"}
 @contextmanager
 def redirect(std: str, to_file: str):
     """
-    Redirects ``std`` (one of ``"stdout"`` or ``"stderr"``) to a file
-    in the path specified by ``to_file``. This method redirects the
-    underlying std file descriptor (not just python's ``sys.stdout|stderr``).
+    Redirect ``std`` (one of ``"stdout"`` or ``"stderr"``) to a file in the path specified by ``to_file``.
+
+    This method redirects the underlying std file descriptor (not just python's ``sys.stdout|stderr``).
     See usage for details.
 
     Directory of ``dst_filename`` is assumed to exist and the destination file
@@ -74,9 +76,10 @@ def redirect(std: str, to_file: str):
      print("stdout restored")
 
     """
-
     if std not in _VALID_STD:
-        raise ValueError(f"unknown standard stream <{std}>, must be one of {_VALID_STD}")
+        raise ValueError(
+            f"unknown standard stream <{std}>, must be one of {_VALID_STD}"
+        )
 
     c_std = _c_std(std)
     python_std = _python_std(std)

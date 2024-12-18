@@ -8,8 +8,8 @@
 
 # SPDX-License-Identifier: BSD-3-Clause
 # Modifications made by NVIDIA
-# - added shell=False to Popen to mitigate security thread
-# - added suppression for subprocess low serverity issue
+# Added shell=False to Popen to mitigate security thread
+# Added suppression for subprocess low serverity issue
 
 import atexit
 import logging
@@ -17,7 +17,6 @@ import os
 import shlex
 import shutil
 import socket
-
 # Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
 # Severity: Low   Confidence: High
 # CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
@@ -38,8 +37,7 @@ log = logging.getLogger(__name__)
 
 def find_free_port():
     """
-    Finds a free port and binds a temporary socket to it so that
-    the port can be "reserved" until used.
+    Find a free port and binds a temporary socket to it so that the port can be "reserved" until used.
 
     .. note:: the returned socket must be closed before using the port,
               otherwise a ``address already in use`` error will happen.
@@ -69,7 +67,7 @@ def find_free_port():
             s.listen(0)
             return s
         except OSError as e:
-            s.close()
+            s.close()  # type: ignore[possibly-undefined]
             print(f"Socket creation attempt failed: {e}")
     raise RuntimeError("Failed to create a socket")
 
@@ -87,7 +85,7 @@ def stop_etcd(subprocess, data_dir: Optional[str] = None):
 
 class EtcdServer:
     """
-    .. note:: tested on etcd server v3.4.3
+    .. note:: tested on etcd server v3.4.3.
 
     Starts and stops a local standalone etcd server on a random free
     port. Useful for single node, multi-worker launches or testing,
@@ -123,7 +121,9 @@ class EtcdServer:
 
         root = os.path.dirname(__file__)
         default_etcd_bin = os.path.join(root, "bin/etcd")
-        self._etcd_binary_path = os.environ.get("TORCHELASTIC_ETCD_BINARY_PATH", default_etcd_bin)
+        self._etcd_binary_path = os.environ.get(
+            "TORCHELASTIC_ETCD_BINARY_PATH", default_etcd_bin
+        )
         if not os.path.isfile(self._etcd_binary_path):
             self._etcd_binary_path = "etcd"
 
@@ -135,29 +135,22 @@ class EtcdServer:
 
     def _get_etcd_server_process(self) -> subprocess.Popen:
         if not self._etcd_proc:
-            raise RuntimeError("No etcd server process started. Call etcd_server.start() first")
+            raise RuntimeError(
+                "No etcd server process started. Call etcd_server.start() first"
+            )
         else:
             return self._etcd_proc
 
     def get_port(self) -> int:
-        """
-        Returns:
-            the port the server is running on.
-        """
+        """Return the port the server is running on."""
         return self._port
 
     def get_host(self) -> str:
-        """
-        Returns:
-            the host the server is running on.
-        """
+        """Return the host the server is running on."""
         return self._host
 
     def get_endpoint(self) -> str:
-        """
-        Returns:
-            the etcd server endpoint (host:port)
-        """
+        """Return the etcd server endpoint (host:port)."""
         return f"{self._host}:{self._port}"
 
     def start(
@@ -167,8 +160,7 @@ class EtcdServer:
         stderr: Union[int, TextIO, None] = None,
     ) -> None:
         """
-        Starts the server, and waits for it to be ready. When this function
-        returns the sever is ready to take requests.
+        Start the server, and waits for it to be ready. When this function returns the sever is ready to take requests.
 
         Args:
             timeout: time (in seconds) to wait for the server to be ready
@@ -192,7 +184,9 @@ class EtcdServer:
             except Exception as e:
                 curr_retries += 1
                 stop_etcd(self._etcd_proc)
-                log.warning("Failed to start etcd server, got error: %s, retrying", str(e))
+                log.warning(
+                    "Failed to start etcd server, got error: %s, retrying", str(e)
+                )
                 if curr_retries >= num_retries:
                     shutil.rmtree(self._base_data_dir, ignore_errors=True)
                     raise
@@ -237,12 +231,10 @@ class EtcdServer:
         self._wait_for_ready(timeout)
 
     def get_client(self):
-        """
-        Returns:
-           An etcd client object that can be used to make requests to
-           this server.
-        """
-        return etcd.Client(host=self._host, port=self._port, version_prefix="/v2", read_timeout=10)
+        """Return an etcd client object that can be used to make requests to this server."""
+        return etcd.Client(
+            host=self._host, port=self._port, version_prefix="/v2", read_timeout=10
+        )
 
     def _wait_for_ready(self, timeout: int = 60) -> None:
         client = etcd.Client(
@@ -254,7 +246,9 @@ class EtcdServer:
             if self._get_etcd_server_process().poll() is not None:
                 # etcd server process finished
                 exitcode = self._get_etcd_server_process().returncode
-                raise RuntimeError(f"Etcd server process exited with the code: {exitcode}")
+                raise RuntimeError(
+                    f"Etcd server process exited with the code: {exitcode}"
+                )
             try:
                 log.info("etcd server ready. version: %s", client.version)
                 return
@@ -263,8 +257,6 @@ class EtcdServer:
         raise TimeoutError("Timed out waiting for etcd server to be ready!")
 
     def stop(self) -> None:
-        """
-        Stops the server and cleans up auto generated resources (e.g. data dir)
-        """
+        """Stop the server and cleans up auto generated resources (e.g. data dir)."""
         log.info("EtcdServer stop method called")
         stop_etcd(self._etcd_proc, self._base_data_dir)

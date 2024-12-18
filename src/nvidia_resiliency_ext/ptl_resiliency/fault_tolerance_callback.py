@@ -26,7 +26,16 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 import torch
-from pytorch_lightning.callbacks import Callback
+
+from ._utils import is_module_available
+
+if is_module_available("lightning"):
+    from lightning.pytorch.callbacks import Callback
+elif is_module_available("pytorch_lightning"):
+    from pytorch_lightning.callbacks import Callback
+else:
+    raise ImportError("Could not find 'lightning' or 'pytorch_lightning' module")
+
 
 import nvidia_resiliency_ext.fault_tolerance as ft
 
@@ -365,8 +374,7 @@ class FaultToleranceCallback(Callback):
 
         self.timeouts_file_path = ft_dir / self.TIMEOUTS_FILENAME
 
-        # Disable in-memory checkpoint manager, as it is not implemented yet.
-        self.fault_tol_client.init_workload_monitoring(chkpt_manager=ft.CheckpointManagerType.NONE)
+        self.fault_tol_client.init_workload_monitoring()
         self._maybe_load_ft_timeouts()
 
         ft_timeouts = self.fault_tol_client.timeouts

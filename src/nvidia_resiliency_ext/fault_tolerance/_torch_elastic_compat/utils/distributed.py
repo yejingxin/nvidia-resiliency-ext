@@ -5,13 +5,17 @@
 #
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Modifications made by NVIDIA
+# All occurences of 'torch.distributed.elastic' were replaced with 'nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat'
 import datetime
 import socket
 from contextlib import closing
 
 import torch.distributed as dist
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.utils.logging import get_logger
 
-from .logging import get_logger
 
 log = get_logger(__name__)
 
@@ -52,11 +56,7 @@ def create_c10d_store(
             "  world_size  : %s\n"
             "  is_server   : %s\n"
             "  timeout(sec): %s\n",
-            server_addr,
-            port,
-            world_size,
-            is_server,
-            timeout,
+            server_addr, port, world_size, is_server, timeout
         )
 
         try:
@@ -81,10 +81,14 @@ def create_c10d_store(
             # TODO properly map the exceptions in pybind (c10d/init.cpp)
             if str(e) == _ADDRESS_IN_USE:  # this will only happen on the server
                 if attempt < retries:
-                    log.warning("port: %s already in use, attempt: [%s/%s]", port, attempt, retries)
+                    log.warning(
+                        "port: %s already in use, attempt: [%s/%s]", port, attempt, retries
+                    )
                     attempt += 1
                 else:
-                    raise RuntimeError(f"on {server_addr}, port: {port} already in use") from e
+                    raise RuntimeError(
+                        f"on {server_addr}, port: {port} already in use"
+                    ) from e
             else:
                 raise
 
@@ -98,7 +102,9 @@ def _check_full_rank(store, world_size):
         store.get(_LAST_MEMBER_CHECKIN)
     except RuntimeError as e:
         if str(e) == _SOCKET_TIMEOUT:
-            raise TimeoutError(f"timed out waiting for all {world_size} members to join") from e
+            raise TimeoutError(
+                f"timed out waiting for all {world_size} members to join"
+            ) from e
         else:
             raise
 

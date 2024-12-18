@@ -19,14 +19,21 @@ import pathlib
 import shutil
 import tempfile
 
+from nvidia_resiliency_ext.ptl_resiliency._utils import is_module_available
+
+if is_module_available("lightning"):
+    import lightning.pytorch as pl
+elif is_module_available("pytorch_lightning"):
+    import pytorch_lightning as pl
+else:
+    raise ImportError("Could not find 'lightning' or 'pytorch_lightning' module")
+
+
 import pytest
-import pytorch_lightning as pl
 import torch
 from torch import nn
 
 from nvidia_resiliency_ext.ptl_resiliency import StragglerDetectionCallback
-
-pytestmark = pytest.mark.gpu
 
 
 class OnesDataset(torch.utils.data.Dataset):

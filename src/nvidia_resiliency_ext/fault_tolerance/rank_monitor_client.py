@@ -13,28 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import dataclasses
 import logging
 import os
 import socket
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import Any, Mapping, Optional
 
-from .chkpt_manager import (
-    CheckpointManagerType,
-    InMemCheckpointManagerAsync,
-    InMemCheckpointManagerNone,
-)
-from .data import (
-    AuthkeyMsg,
-    GetCheckpointMsg,
-    HeartbeatMsg,
-    InitMsg,
-    OkMsg,
-    RankInfo,
-    UpdateConfigMsg,
-)
+from .data import AuthkeyMsg, HeartbeatMsg, InitMsg, OkMsg, RankInfo, UpdateConfigMsg
 from .rank_monitor_server import RankMonitorServer
 from .timeouts_calc import TimeoutsCalc
 from .utils import read_obj_from_ipc_socket, write_object_to_ipc_socket
@@ -76,12 +62,7 @@ class RankMonitorClient:
     Its instances are created in each rank process. After creation,
     IPC connection can be established with `RankMonitorServer` using `.init_workload_monitoring`.
     The client should send heartbeats to the server, which monitor its health.
-    Heartbeats are sent:
-    - explicitly, with `.send_heartbeat`
-    - implicitly, with `.get_parameters_update_section`, when leaving the section
-
-    Heartbeats can contain the state of the rank process, e.g. model parameters.
-    The state is obtained from a user callback provided to `.init_workload_monitoring`.
+    Heartbeats are sent with `.send_heartbeat`.
 
     `RankMonitorServer` monitors time between heartbeats and can detect hangs.
     `RankMonitorClient` can estimate suitable timeouts for the heartbeats,
@@ -107,7 +88,6 @@ class RankMonitorClient:
         self.rank_info = None
         self.rank_monitor_socket = None
         self.is_initialized = False
-        self.get_state_dict_cb = None
         self.timeouts_calc = None
         self.timeouts = None
         self.loaded_timeouts = None
@@ -140,6 +120,13 @@ class RankMonitorClient:
         self._ensure_response_is_ok(self.rank_monitor_socket)
         self.timeouts = new_timeouts
 
+    @staticmethod
+    def _merge_timeouts(new_value: float, old_value: float, alpha: float = 0.75) -> float:
+        """Merge computed timeout values with EMA"""
+        assert 0 < alpha <= 1, "Alpha must be in the range (0, 1]."
+        assert old_value > 0 and new_value > 0, "Timeout values must be non-negative."
+        return alpha * new_value + (1 - alpha) * old_value
+
     def calculate_and_set_timeouts(self, skip_if_not_ready: bool = False) -> bool:
         """
         Calculates and sets the timeouts used for hang detection.
@@ -161,8 +148,10 @@ class RankMonitorClient:
             to = self.timeouts_calc.get_timeouts()
             new_initial, new_subsequent = to.initial, to.subsequent
             if self.timeouts.are_valid and self.timeouts.were_calculated:
-                new_initial = max(new_initial, self.timeouts.initial)
-                new_subsequent = max(new_subsequent, self.timeouts.subsequent)
+                new_initial = RankMonitorClient._merge_timeouts(new_initial, self.timeouts.initial)
+                new_subsequent = RankMonitorClient._merge_timeouts(
+                    new_subsequent, self.timeouts.subsequent
+                )
             new_timeouts = HeartbeatTimeouts(
                 initial=new_initial,
                 subsequent=new_subsequent,
@@ -194,10 +183,6 @@ class RankMonitorClient:
                 f"RankMonitorClient could not send the heartbeat. Exception: {e}"
             )
 
-    @staticmethod
-    def _default_get_state_dict_cb() -> Dict:
-        return {}
-
     def _connect_to_rmon_server(self):
         assert self.rank_monitor_socket is None
         ipc_socket_path = RankMonitorServer.get_ipc_socket_path(self.rank_info.rank)
@@ -218,19 +203,9 @@ class RankMonitorClient:
 
     def init_workload_monitoring(
         self,
-        get_state_dict_cb: Optional[Callable[[], Dict]] = None,
-        chkpt_manager: CheckpointManagerType = CheckpointManagerType.ASYNC,
     ) -> None:
         """
         Initializes the fault tolerance and connects to the RankMonitorServer.
-
-        Args:
-            get_state_dict_cb (callable, optional): Callback function used to get the state dictionary,
-                that represents the rank state. This state dict is sent to the server with each heartbeat.
-                If None, empty state is used. Defaults to None.
-            chkpt_manager (CheckpointManagerType): In-memory checkpoint manager to be used.
-                Default is `CheckpointManagerType.ASYNC` which implements async D2H.
-
         """
         if self.is_initialized:
             raise RankMonitorClientError("RankMonitorClient is already initialized")
@@ -238,18 +213,6 @@ class RankMonitorClient:
         self.logger.debug(f"Initializing fault detection. Rank process PID={os.getpid()}")
 
         self.rank_info = RankInfo.get_for_current_rank()
-
-        if get_state_dict_cb is None:
-            self.get_state_dict_cb = RankMonitorClient._default_get_state_dict_cb
-        else:
-            self.get_state_dict_cb = get_state_dict_cb
-
-        if chkpt_manager == CheckpointManagerType.ASYNC:
-            self.chkpt_manager = InMemCheckpointManagerAsync()
-        elif chkpt_manager == CheckpointManagerType.NONE:
-            self.chkpt_manager = InMemCheckpointManagerNone()
-        else:
-            assert False, f"Unsupported state transform type: {chkpt_manager}"
 
         self._connect_to_rmon_server()
 
@@ -283,34 +246,10 @@ class RankMonitorClient:
         Shutdown the workload monitoring and close the connection to the RankMonitorServer.
         """
         if self.is_initialized:
+            self.rank_monitor_socket.shutdown(socket.SHUT_RDWR)
             self.rank_monitor_socket.close()
             self.rank_monitor_socket = None
             self.is_initialized = False
-
-    @contextlib.contextmanager
-    def get_parameters_update_section(self):
-        """
-        Get context manager that is used to mark parameters update section.
-        """
-        self._ensure_is_ready()
-
-        hb_sent = False
-
-        if hb_payload1 := self.chkpt_manager.prepare_for_state_update(self.iter_idx):
-            self._send_heartbeat_impl(state=hb_payload1)
-            hb_sent = True
-
-        yield
-
-        current_state = self.get_state_dict_cb()
-        if hb_payload2 := self.chkpt_manager.after_state_update_issued(current_state):
-            self._send_heartbeat_impl(state=hb_payload2)
-            hb_sent = True
-
-        if not hb_sent:
-            self._send_heartbeat_impl(state={})
-
-        self.iter_idx += 1
 
     def send_heartbeat(self) -> None:
         """
@@ -349,21 +288,3 @@ class RankMonitorClient:
             if self.is_initialized:
                 self._set_calculated_timeouts(self.loaded_timeouts)
             # else, the timeouts will be set in `init_workload_monitoring`
-
-    def get_checkpoint_from_rmon(self) -> Dict:
-        """
-        Returns rank state that was collected by rank monitor based on received heartbeats.
-
-        Returns:
-            Dict: state obtained from the rank monitor
-        """
-        self._ensure_is_ready()
-        try:
-            hb_msg = GetCheckpointMsg(self.rank_info.rank)
-            write_object_to_ipc_socket(hb_msg, self.rank_monitor_socket)
-            resp = self._ensure_response_is_ok(self.rank_monitor_socket)
-            return self.chkpt_manager.restore(resp.state)
-        except Exception as e:
-            raise RankMonitorClientError(
-                f"RankMonitorClient could not get rank state from rank monitor. Exception: {e}"
-            )

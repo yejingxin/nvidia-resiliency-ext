@@ -6,9 +6,7 @@
 
 # SPDX-License-Identifier: BSD-3-Clause
 # Modifications made by NVIDIA
-# - This package is a copy of `torch.distributed.elastic` from PyTorch version 2.1.2
-# - All occurences of 'torch.distributed.elastic' were replaced with 'fault_tolerance._torch_elastic_compat'
-
+# All occurences of 'torch.distributed.elastic' were replaced with 'fault_tolerance._torch_elastic_compat'
 import abc
 import logging
 import threading
@@ -20,7 +18,6 @@ from typing import Any, Dict, List, Optional, Set
 __all__ = ['TimerRequest', 'TimerClient', 'RequestQueue', 'TimerServer', 'configure', 'expires']
 
 log = logging.getLogger(__name__)
-
 
 class TimerRequest:
     """
@@ -118,7 +115,9 @@ class TimerServer(abc.ABC):
     reaping workers that have expired timers.
     """
 
-    def __init__(self, request_queue: RequestQueue, max_interval: float, daemon: bool = True):
+    def __init__(
+        self, request_queue: RequestQueue, max_interval: float, daemon: bool = True
+    ):
         """
         :param request_queue: Consumer ``RequestQueue``
         :param max_interval: max time (in seconds) to wait
@@ -174,11 +173,10 @@ class TimerServer(abc.ABC):
         """
         try:
             return self._reap_worker(worker_id)
-        except Exception as e:
-            log.error(
+        except Exception:
+            log.exception(
                 "Uncaught exception thrown from _reap_worker(), "
                 "check that the implementation correctly catches exceptions",
-                exc_info=e,
             )
             return True
 
@@ -186,8 +184,8 @@ class TimerServer(abc.ABC):
         while not self._stop_signaled:
             try:
                 self._run_watchdog()
-            except Exception as e:
-                log.error("Error running watchdog", exc_info=e)
+            except Exception:
+                log.exception("Error running watchdog")
 
     def _run_watchdog(self):
         batch_size = max(1, self._request_queue.size())
@@ -197,15 +195,17 @@ class TimerServer(abc.ABC):
         reaped_worker_ids = set()
         for worker_id, expired_timers in self.get_expired_timers(now).items():
             log.info(
-                "Reaping worker_id=[%s]." " Expired timers: %s",
-                worker_id,
-                self._get_scopes(expired_timers),
+                "Reaping worker_id=[%s]."
+                " Expired timers: %s",
+                worker_id, self._get_scopes(expired_timers)
             )
             if self._reap_worker_no_throw(worker_id):
                 log.info("Successfully reaped worker=[%s]", worker_id)
                 reaped_worker_ids.add(worker_id)
             else:
-                log.error("Error reaping worker=[%s]. Will retry on next watchdog.", worker_id)
+                log.error(
+                    "Error reaping worker=[%s]. Will retry on next watchdog.", worker_id
+                )
         self.clear_timers(reaped_worker_ids)
 
     def _get_scopes(self, timer_requests):
@@ -213,12 +213,14 @@ class TimerServer(abc.ABC):
 
     def start(self) -> None:
         log.info(
-            "Starting %s..." " max_interval=%s," " daemon=%s",
-            type(self).__name__,
-            self._max_interval,
-            self._daemon,
+            "Starting %s..."
+            " max_interval=%s,"
+            " daemon=%s",
+            type(self).__name__, self._max_interval, self._daemon
         )
-        self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=self._daemon)
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop, daemon=self._daemon
+        )
         log.info("Starting watchdog thread...")
         self._watchdog_thread.start()
 
@@ -233,7 +235,7 @@ class TimerServer(abc.ABC):
             log.info("No watchdog thread running, doing nothing")
 
 
-_timer_client = None
+_timer_client: Optional[TimerClient] = None
 
 
 def configure(timer_client: TimerClient):
@@ -246,7 +248,9 @@ def configure(timer_client: TimerClient):
 
 
 @contextmanager
-def expires(after: float, scope: Optional[str] = None, client: Optional[TimerClient] = None):
+def expires(
+    after: float, scope: Optional[str] = None, client: Optional[TimerClient] = None
+):
     """
     Acquires a countdown timer that expires in ``after`` seconds from now,
     unless the code-block that it wraps is finished within the timeframe.

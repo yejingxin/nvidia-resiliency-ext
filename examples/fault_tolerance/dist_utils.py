@@ -106,13 +106,13 @@ def all_reduce_item(value, op='sum'):
     return ret
 
 
-def get_world_size():
+def get_world_size(group=None):
     """
     Gets total number of distributed workers or returns one if distributed is
     not initialized.
     """
     if torch.distributed.is_available() and torch.distributed.is_initialized():
-        world_size = torch.distributed.get_world_size()
+        world_size = torch.distributed.get_world_size(group)
     else:
         world_size = 1
     return world_size
@@ -184,6 +184,26 @@ def gather_objects(obj, device):
         objs = [None] * world_size
         torch.distributed.all_gather_object(objs, obj)
     return objs
+
+
+def get_device_for_backend(group):
+    """Find the device that should be used with given distributed group backend."""
+    dist_device = torch.device("cpu")
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        if torch.distributed.get_backend(group) == torch.distributed.Backend.NCCL:
+            dist_device = torch.device("cuda")
+    return dist_device
+
+
+def is_true_on_any_rank(flag: bool, group=None) -> bool:
+    """Check if a boolean flag is true in any processes in the group."""
+    ret = flag
+    if get_world_size(group) > 1:
+        device = get_device_for_backend(group)
+        flag_tensor = torch.tensor([1.0 if flag else 0], dtype=torch.float32, device=device)
+        torch.distributed.all_reduce(flag_tensor, op=torch.distributed.ReduceOp.MAX, group=group)
+        ret = bool(flag_tensor.item() > 0)
+    return ret
 
 
 class ResumableDistributedSampler(torch.utils.data.DistributedSampler):

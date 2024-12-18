@@ -13,6 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+#
+# This is a basic example of straggler detection usage with a simple DDP workload
+# It uses straggler detection API to wrap the forward pass and measure GPU performance
+# GPU performance scores are printed at regular intervals
+# You can try "nvidia-smi -i <GPU idx> -lgc 800" to slow down some GPUs and see the effect.
+#
+
 import argparse
 import os
 import time
@@ -50,9 +57,10 @@ class Model(nn.Module):
 def train(args) -> None:
     print(args)
 
-    straggler.Detector.initialize()
+    straggler.Detector.initialize(gather_on_rank0=True)
 
     dist.init_process_group(backend="nccl")
+    rank = dist.get_rank()
     local_rank = int(os.environ["LOCAL_RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
     device = torch.device(f"cuda:{local_rank}")
@@ -60,7 +68,7 @@ def train(args) -> None:
 
     torch.manual_seed(42)
 
-    print(f"Running basic DDP example on device {device}.")
+    print(f"Running basic straggler det. DDP example on device {device}.")
     model = Model().to(device)
 
     ddp_model = DDP(model, device_ids=[local_rank])
@@ -82,6 +90,7 @@ def train(args) -> None:
     ddp_model.train()
     total_iters_made = 0
     training_start_time = time.monotonic()
+
     while epoch_num < args.num_epochs:
         for batch_idx, (data, target) in enumerate(loader):
             data, target = data.to(device), target.to(device)
@@ -100,18 +109,22 @@ def train(args) -> None:
                 print(f"Rank {local_rank} report: {report}")
             total_iters_made += 1
         epoch_num += 1
+
     training_stop_time = time.monotonic()
     time_per_iter = (training_stop_time - training_start_time) / total_iters_made
     print(f"Time per iteration [sec]: {time_per_iter:.5f}")
 
+    straggler.Detector.shutdown()
     dist.destroy_process_group()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num-processes", type=int, default=2)
+    parser.add_argument("--num-processes", type=int, default=4)
     parser.add_argument("--num-epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=100)
+    parser.add_argument("--log-interval", type=int, default=100)
+    parser.add_argument("--report-interval", type=int, default=300)
 
     args: argparse.Namespace = parser.parse_args()
 

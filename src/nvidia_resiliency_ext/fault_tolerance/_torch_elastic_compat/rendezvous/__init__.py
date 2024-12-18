@@ -131,6 +131,7 @@ of the following implementations that come with PyTorch:
 from .api import *  # noqa: F403
 from .registry import _register_default_handlers
 
+
 _register_default_handlers()
 
 
@@ -138,6 +139,7 @@ __all__ = [
     "RendezvousClosedError",
     "RendezvousConnectionError",
     "RendezvousError",
+    "RendezvousGracefulExitError",
     "RendezvousHandler",
     "RendezvousHandlerCreator",
     "RendezvousHandlerRegistry",

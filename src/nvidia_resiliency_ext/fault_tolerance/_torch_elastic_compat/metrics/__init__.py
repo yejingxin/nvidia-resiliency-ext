@@ -8,10 +8,9 @@
 
 # SPDX-License-Identifier: BSD-3-Clause
 # Modifications made by NVIDIA
-# - This package is a copy of `torch.distributed.elastic` from PyTorch version 2.1.2
-# - All occurences of 'torch.distributed.elastic' were replaced with 'fault_tolerance._torch_elastic_compat'
+# All occurences of 'torch.distributed.elastic' were replaced with 'nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat'
 
-"""Metrics API
+"""Metrics API.
 
 **Overview**:
 
@@ -50,7 +49,7 @@ The example below measures the latency for the ``calculate()`` function.
 ::
 
   import time
-  import fault_tolerance._torch_elastic_compat.metrics as metrics
+  import nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics as metrics
 
   # makes all metrics other than the one from "my_module" to go /dev/null
   metrics.configure(metrics.NullMetricsHandler())
@@ -62,14 +61,14 @@ The example below measures the latency for the ``calculate()`` function.
     end = time.time()
     metrics.put_metric("calculate_latency", int(end-start), "my_module")
 
-You may also use the fault_tolerance._torch_elastic_compat.metrics.prof` decorator
+You may also use the nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics.prof` decorator
 to conveniently and succinctly profile functions
 
 ::
 
   # -- in module examples.foobar --
 
-  import fault_tolerance._torch_elastic_compat.metrics as metrics
+  import nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics as metrics
 
   metrics.configure(metrics.ConsoleMetricsHandler(), "foobar")
   metrics.configure(metrics.ConsoleMetricsHandler(), "Bar")
@@ -93,7 +92,7 @@ to conveniently and succinctly profile functions
 
 **Configuring Metrics Handler**:
 
-`fault_tolerance._torch_elastic_compat.metrics.MetricHandler` is responsible for emitting
+`nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics.MetricHandler` is responsible for emitting
 the added metric values to a particular destination. Metric groups can be
 configured with different metric handlers.
 
@@ -104,7 +103,7 @@ console.
 
 ::
 
-  import fault_tolerance._torch_elastic_compat.metrics as metrics
+  import nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics as metrics
 
   metrics.configure(metrics.ConsoleMetricHandler(), group = "torchelastic")
   metrics.configure(metrics.ConsoleMetricHandler(), group = "my_app")
@@ -112,14 +111,14 @@ console.
 **Writing a Custom Metric Handler**:
 
 If you want your metrics to be emitted to a custom location, implement
-the `fault_tolerance._torch_elastic_compat.metrics.MetricHandler` interface
+the `nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics.MetricHandler` interface
 and configure your job to use your custom metric handler.
 
 Below is a toy example that prints the metrics to ``stdout``
 
 ::
 
-  import fault_tolerance._torch_elastic_compat.metrics as metrics
+  import nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics as metrics
 
   class StdoutMetricHandler(metrics.MetricHandler):
      def emit(self, metric_data):
@@ -163,6 +162,6 @@ def initialize_metrics(cfg: Optional[MetricsConfig] = None):
 
 
 try:
-    from .static_init import *  # type: ignore[import] # noqa: F401 F403
+    from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.metrics.static_init import *  # type: ignore[import] # noqa: F401 F403
 except ModuleNotFoundError:
     pass

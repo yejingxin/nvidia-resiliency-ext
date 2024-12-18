@@ -8,8 +8,8 @@
 
 # SPDX-License-Identifier: BSD-3-Clause
 # Modifications made by NVIDIA
-# - This package is a copy of `torch.distributed.elastic` from PyTorch version 2.1.2
-# - All occurences of 'torch.distributed.elastic' were replaced with 'fault_tolerance._torch_elastic_compat'
+# All occurences of 'torch.distributed.elastic' were replaced with 'nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat'
+
 """
 Module contains events processing mechanisms that are integrated with the standard python logging.
 
@@ -17,7 +17,7 @@ Example of usage:
 
 ::
 
-  from fault_tolerance._torch_elastic_compat import events
+  from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat import events
   event = events.Event(name="test_event", source=events.EventSource.WORKER, metadata={...})
   events.get_logging_handler(destination="console").info(event)
 
@@ -31,15 +31,22 @@ import traceback
 from enum import Enum
 from typing import Dict, Optional
 
-from .api import Event, EventMetadataValue, EventSource, NodeState, RdzvEvent  # noqa: F401
-from .handlers import get_logging_handler
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.events.handlers import get_logging_handler
+
+from .api import (  # noqa: F401
+    Event,
+    EventMetadataValue,
+    EventSource,
+    NodeState,
+    RdzvEvent,
+)
 
 _events_loggers: Dict[str, logging.Logger] = {}
 
-
 def _get_or_create_logger(destination: str = "null") -> logging.Logger:
     """
-    Constructs python logger based on the destination type or extends if provided.
+    Construct python logger based on the destination type or extends if provided.
+
     Available destination could be found in ``handlers.py`` file.
     The constructed logger does not propagate messages to the upper level loggers,
     e.g. root logger. This makes sure that a single event can be processed once.
@@ -67,7 +74,6 @@ def _get_or_create_logger(destination: str = "null") -> logging.Logger:
 
 def record(event: Event, destination: str = "null") -> None:
     _get_or_create_logger(destination).info(event.serialize())
-
 
 def record_rdzv_event(event: RdzvEvent) -> None:
     _get_or_create_logger("dynamic_rendezvous").info(event.serialize())

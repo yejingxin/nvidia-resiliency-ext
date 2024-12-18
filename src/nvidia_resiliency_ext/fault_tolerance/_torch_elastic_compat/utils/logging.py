@@ -6,13 +6,17 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# SPDX-License-Identifier: BSD-3-Clause
+# Modifications made by NVIDIA
+# All occurences of 'torch.distributed.elastic' were replaced with 'nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat'
+
 import inspect
 import logging
 import os
 import warnings
 from typing import Optional
 
-from .log_level import get_log_level
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.utils.log_level import get_log_level
 
 
 def get_logger(name: Optional[str] = None):

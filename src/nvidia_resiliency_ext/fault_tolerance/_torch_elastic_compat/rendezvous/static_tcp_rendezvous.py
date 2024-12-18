@@ -6,15 +6,17 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# SPDX-License-Identifier: BSD-3-Clause
+# Modifications made by NVIDIA
+# All occurences of 'torch.distributed.elastic' were replaced with 'nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat'
 import datetime
 import logging
-from typing import Optional, Tuple, cast
+from typing import Tuple, cast, Optional
 
 # pyre-ignore[21]: Could not find name `Store` in `torch.distributed`.
-from torch.distributed import PrefixStore, Store, TCPStore
-
-from . import RendezvousHandler, RendezvousParameters
-from .utils import parse_rendezvous_endpoint
+from torch.distributed import Store, TCPStore, PrefixStore
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.rendezvous import RendezvousHandler, RendezvousParameters
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.rendezvous.utils import parse_rendezvous_endpoint
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +26,7 @@ _default_timeout_seconds = 600
 class StaticTCPRendezvous(RendezvousHandler):
     """
     Static rendezvous that is a wrapper around the TCPStore.
+
     Creates TCPStore based on the input parameters with the
     listener on the agent with group_rank=0
     """
@@ -82,7 +85,8 @@ class StaticTCPRendezvous(RendezvousHandler):
 def create_rdzv_handler(params: RendezvousParameters) -> RendezvousHandler:
     if "rank" not in params.config:
         raise ValueError(
-            "rank is absent in RendezvousParameters." "Try add --node-rank to the cmd request"
+            "rank is absent in RendezvousParameters."
+            "Try add --node-rank to the cmd request"
         )
     endpoint = params.endpoint.strip()
     if not endpoint:
@@ -102,4 +106,6 @@ def create_rdzv_handler(params: RendezvousParameters) -> RendezvousHandler:
         timeout = int(params.config["timeout"])
     else:
         timeout = _default_timeout_seconds
-    return StaticTCPRendezvous(master_addr, master_port, rank, world_size, run_id, timeout)
+    return StaticTCPRendezvous(
+        master_addr, master_port, rank, world_size, run_id, timeout
+    )

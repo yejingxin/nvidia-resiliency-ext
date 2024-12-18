@@ -17,7 +17,6 @@ __all__ = ['LocalTimerClient', 'MultiprocessingRequestQueue', 'LocalTimerServer'
 
 log = logging.getLogger(__name__)
 
-
 class LocalTimerClient(TimerClient):
     """
     Client side of ``LocalTimerServer``. This client is meant to be used
@@ -82,7 +81,9 @@ class LocalTimerServer(TimerServer):
     on the same host).
     """
 
-    def __init__(self, mp_queue: mp.Queue, max_interval: float = 60, daemon: bool = True):
+    def __init__(
+        self, mp_queue: mp.Queue, max_interval: float = 60, daemon: bool = True
+    ):
         super().__init__(MultiprocessingRequestQueue(mp_queue), max_interval, daemon)
         self._timers: Dict[Tuple[Any, str], TimerRequest] = {}
 
@@ -99,7 +100,7 @@ class LocalTimerServer(TimerServer):
                 self._timers[(pid, scope_id)] = request
 
     def clear_timers(self, worker_ids: Set[int]) -> None:
-        for pid, scope_id in list(self._timers.keys()):
+        for (pid, scope_id) in list(self._timers.keys()):
             if pid in worker_ids:
                 self._timers.pop((pid, scope_id))
 
@@ -119,6 +120,6 @@ class LocalTimerServer(TimerServer):
         except ProcessLookupError:
             log.info("Process with pid=%s does not exist. Skipping", worker_id)
             return True
-        except Exception as e:
-            log.error("Error terminating pid=%s", worker_id, exc_info=e)
+        except Exception:
+            log.exception("Error terminating pid=%s", worker_id)
         return False

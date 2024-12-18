@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .chkpt_manager import CheckpointManagerType  # noqa: F401
 from .config import FaultToleranceConfig  # noqa: F401
 from .rank_monitor_client import RankMonitorClient  # noqa: F401
 from .rank_monitor_client import RankMonitorClientError  # noqa: F401

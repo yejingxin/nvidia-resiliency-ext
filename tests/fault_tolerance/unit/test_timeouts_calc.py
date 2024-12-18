@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import faulthandler
 import shutil
 import sys
 import tempfile
@@ -51,7 +50,6 @@ def test_basic():
 
 
 def _rank_main(*args, tmp_dir, **kwargs):
-    faulthandler.enable(file=sys.stderr)
     tc = TimeoutsCalc(start_time=0, safety_factor=2.0)
     rank = dist.get_rank()
     if rank in [1, 2]:

@@ -168,17 +168,15 @@ def _rank_main_2nd_run(*args, tmp_dir, **kwargs):
         state['timeouts1_subsequent'], rel=0.01
     )
 
-    # send a few heartbeats one after another and re-calculate the timeouts,
-    # timeouts should not change, if currently used are larger than the newly calculated ones
+    # send a few heartbeats one after another and re-calculate the timeouts
+    # timeouts should be reduced, as EMA is used to merge old and new values
     rank_mon_cli.send_heartbeat()
     rank_mon_cli.send_heartbeat()
     rank_mon_cli.send_heartbeat()
     rank_mon_cli.calculate_and_set_timeouts()
 
-    assert rank_mon_cli.timeouts.initial == pytest.approx(state['timeouts1_initial'], rel=0.01)
-    assert rank_mon_cli.timeouts.subsequent == pytest.approx(
-        state['timeouts1_subsequent'], rel=0.01
-    )
+    assert rank_mon_cli.timeouts.initial < state['timeouts1_initial']
+    assert rank_mon_cli.timeouts.subsequent < state['timeouts1_subsequent']
 
     sys.exit(0)
 

@@ -82,16 +82,6 @@ class HeartbeatMsg:
         self.state_dict_for_chkpt = state_dict_for_chkpt
 
 
-class GetCheckpointMsg:
-    """
-    Get rank state that was collected on the rank monitor
-    """
-
-    def __init__(self, rank: int, state_dict_for_chkpt: Optional[Mapping] = None):
-        self.rank = rank
-        self.state_dict_for_chkpt = state_dict_for_chkpt
-
-
 class UpdateConfigMsg:
     """
     Sent from rank -> rank monitor, when some config items are updated.

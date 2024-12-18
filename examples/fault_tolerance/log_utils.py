@@ -23,9 +23,8 @@ import dist_utils
 def setup_logging(log_all_ranks=True, filename=os.devnull, filemode='w'):
     """
     Configures logging.
-    By default logs from all workers are printed to the console, entries are
-    prefixed with "N: " where N is the rank of the worker. Logs printed to the
-    console don't include timestaps.
+    By default logs from all workers are printed to the stderr, entries are
+    prefixed with "N: " where N is the rank of the worker. Logs printed to the stderr don't include timestaps.
     Full logs with timestamps are saved to the log_file file.
     """
 
@@ -62,16 +61,12 @@ def setup_logging(log_all_ranks=True, filename=os.devnull, filemode='w'):
         filename=filename,
         filemode=filemode,
     )
-    console = logging.StreamHandler(sys.stdout)
-    console.setLevel(logging.DEBUG)
     stderr = logging.StreamHandler(sys.stderr)
     stderr.setLevel(logging.DEBUG)
     if log_all_ranks:
         formatter = logging.Formatter(f'{rank}: %(message)s')
     else:
         formatter = logging.Formatter('%(message)s')
-    console.setFormatter(formatter)
     stderr.setFormatter(formatter)
-    logging.getLogger('').addHandler(console)
     logging.getLogger('').addHandler(stderr)
     logging.getLogger('').addFilter(rank_filter)

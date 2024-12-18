@@ -1,4 +1,4 @@
-# Test image used for FT tests with NeMo 2.0 (`ft_test.sh`)
+# Test image used for FT tests with NeMo 2.0 (`ft_test_sim_nodes.sh`)
 
 ARG BASE_IMG
 FROM ${BASE_IMG}

@@ -35,10 +35,6 @@ TERM_BY_FT_EXIT_CODE = 123
 FT_TERM_SIGNAL = signal.SIGUSR1
 
 
-def _dummy_get_state():
-    return {"state": b"dummy"}
-
-
 def _get_ft_test_config():
     ft_cfg = fault_tolerance.FaultToleranceConfig()
     ft_cfg.initial_rank_heartbeat_timeout = 8.0
@@ -85,9 +81,7 @@ def _rank_main_all_ranks_initialized(*args, **kwargs):
     # - clean exit, no failure detected
     _install_signal_handler()
     rank_mon_cli = fault_tolerance.RankMonitorClient()
-    rank_mon_cli.init_workload_monitoring(
-        get_state_dict_cb=_dummy_get_state,
-    )
+    rank_mon_cli.init_workload_monitoring()
     sys.exit(0)
 
 
@@ -99,9 +93,7 @@ def _rank_main_no_initial_heartbeat_from_rank_0(*args, **kwargs):
     # - workload failure detected, rank 0 is terminated by rank monitor
     _install_signal_handler()
     rank_mon_cli = fault_tolerance.RankMonitorClient()
-    rank_mon_cli.init_workload_monitoring(
-        get_state_dict_cb=_dummy_get_state,
-    )
+    rank_mon_cli.init_workload_monitoring()
 
     rank = torch.distributed.get_rank()
     if rank == 0:
@@ -118,9 +110,7 @@ def _rank_main_no_initial_heartbeats(*args, **kwargs):
     # - workload failure detected, all ranks terminated by rank monitors
     _install_signal_handler()
     rank_mon_cli = fault_tolerance.RankMonitorClient()
-    rank_mon_cli.init_workload_monitoring(
-        get_state_dict_cb=_dummy_get_state,
-    )
+    rank_mon_cli.init_workload_monitoring()
     time.sleep(WORKLOAD_TIMEOUT + 1)
     sys.exit(0)
 

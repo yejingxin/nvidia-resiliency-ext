@@ -9,6 +9,7 @@
 import logging
 from typing import Dict
 
+
 _log_handlers: Dict[str, logging.Handler] = {
     "console": logging.StreamHandler(),
     "dynamic_rendezvous": logging.NullHandler(),

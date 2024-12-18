@@ -17,7 +17,7 @@
 
 NUM_TESTS=4
 RES_DIR="./local_ddp_test_results"
-WORLD_SIZE=2 # must be 2 for deterministic all reduce
+WORLD_SIZE=8
 TORCH_PORT=12321
 WORKLOAD_MONITOR_PORT=11223
 MAX_RESTARTS=32
@@ -27,6 +27,25 @@ mkdir -p ${RES_DIR}
 rm -rf ${RES_DIR}/output_*
 rm -rf ${RES_DIR}/_ft_scratch_dir
 
+
+function assert_log_contains {
+   log_file="$1"
+   expected_str="$2"
+   if ! grep -q "${expected_str}" ${log_file}  ; then
+      echo "Expected string not found in logs from nodes: ${expected_str}"
+      exit 1
+   fi
+}
+
+function assert_not_in_log {
+   log_file="$1"
+   not_expected_str="$2"
+    if grep -q "${not_expected_str}" ${log_file}  ; then
+        echo "Not expected string found in logs from nodes: ${not_expected_str}"
+        exit 1
+    fi
+}
+
 for i in `seq ${NUM_TESTS}`
 do
    echo "### Starting TEST ${i}/${NUM_TESTS} ###"
@@ -35,7 +54,7 @@ do
    echo "TEST ${i}, run ${training_parts_num}"
 
    # launch the training
-   TRAIN_CMD="examples/train_ddp.py "
+   TRAIN_CMD="examples/fault_tolerance/train_ddp.py "
    TRAIN_CMD+=" --device cuda "
    TRAIN_CMD+=" --init_distributed_method tcp "
    TRAIN_CMD+=" --output_dir ${RES_DIR}/output_$i "
@@ -58,8 +77,8 @@ do
    echo "Launching ${WORLD_SIZE} x \"${TRAIN_CMD}\" with ft launcher..."
 
    ft_launcher --nproc-per-node=${WORLD_SIZE} --max-restarts=${MAX_RESTARTS} \
-      --fault-tol-cfg-path="examples/fault_tol_cfg.yaml" --term-timeout=15 \
-      ${TRAIN_CMD} >> ${RES_DIR}/output_$i/log.log
+      --fault-tol-cfg-path="examples/fault_tolerance/fault_tol_cfg.yaml" --term-timeout=15 \
+      ${TRAIN_CMD} 2>&1 | tee -a ${RES_DIR}/output_$i/log.log
 
    if [ $? -ne 0 ]
    then
@@ -67,40 +86,29 @@ do
       exit 1
    fi
 
-   # Training is finished, we have new results in "${RES_DIR}/output_$i"
-   # extract special lines used for verification into separate file
-   # remove duplicated lines
-   grep "CHECK" ${RES_DIR}/output_$i/log.log | \
-      awk '{if ($0==lst) {lst=""} else {print $0; lst=$0}}' > ${RES_DIR}/output_$i/short_log.log
-
-   # Check if results not empty
-   if [ ! -s ${RES_DIR}/output_$i/short_log.log ]
+   # 1st run should be full, uninterrupted run,
+   # other runs will be interrupted with simulated faults.
+   if [ "${i}" -eq "1" ]
    then
-      echo "FAILED: Results from training ${i} are empty!"
-      exit 1    
+      assert_not_in_log "${RES_DIR}/output_$i/log.log" "Simulating fault"
+   else
+      assert_log_contains "${RES_DIR}/output_$i/log.log" "Simulating fault"
    fi
 
-   # Check if current results match
-   if ( ! diff -yq ${RES_DIR}/output_1/short_log.log ${RES_DIR}/output_$i/short_log.log )
-   then
-      echo "FAILED: Results from trainings 1 and ${i} are not the same"
-      exit 1    
-   fi
+   # Timeouts should be updated during each run
+   assert_log_contains "${RES_DIR}/output_$i/log.log" "Updated timeouts"
+   # Training should be completed after each run
+   assert_log_contains "${RES_DIR}/output_$i/log.log" "Leaving main"
+
 done
 
-# Check if results number is OK
-results_num=$(find ${RES_DIR}/ -name "short_log.log" |wc -l)
+# Check if results number is OK, 
+# We only test hang detection and restarting, so no need to look into the logs.
+results_num=$(find ${RES_DIR}/ -name "log.log" |wc -l)
 if [ "$results_num" -ne "${NUM_TESTS}" ] 
 then
    echo "FAILED: Results number ${results_num} does not match requested tests number ${NUM_TESTS}"
    exit 1  
 fi
 
-# Double check all results
-if ( find ${RES_DIR}/ -name "short_log.log" |xargs -L 1 diff -yq ${RES_DIR}/output_1/short_log.log )
-then
-   echo "SUCCESS: all trainings results match"
-else
-   echo "FAILED: Results from trainings are not the same"
-   exit 1    
-fi
+echo "SUCCESS"

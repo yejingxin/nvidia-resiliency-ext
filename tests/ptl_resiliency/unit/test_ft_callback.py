@@ -24,11 +24,21 @@ import signal
 import sys
 import tempfile
 
+from nvidia_resiliency_ext.ptl_resiliency._utils import is_module_available
+
+if is_module_available("lightning"):
+    import lightning.pytorch as pl
+    from lightning.pytorch.callbacks import Callback
+    from lightning.pytorch.utilities.exceptions import _TunerExitException
+elif is_module_available("pytorch_lightning"):
+    import pytorch_lightning as pl
+    from pytorch_lightning.callbacks import Callback
+    from pytorch_lightning.utilities.exceptions import _TunerExitException
+else:
+    raise ImportError("Could not find 'lightning' or 'pytorch_lightning' module")
+
 import pytest
-import pytorch_lightning as pl
 import torch
-from pytorch_lightning.callbacks import Callback
-from pytorch_lightning.utilities.exceptions import _TunerExitException
 from torch import nn
 
 import nvidia_resiliency_ext.fault_tolerance as fault_tolerance
@@ -182,7 +192,7 @@ def _create_test_logger(logger_name, log_file_path):
 def _run_trainining(
     tmp_path,
     max_steps=100_000,
-    max_epochs=3,
+    max_epochs=4,
     max_time=None,
     val_check_interval=None,
     custom_callbacks=None,
@@ -206,7 +216,7 @@ def _run_trainining(
     trainer = pl.Trainer(
         strategy='ddp',
         devices=1,
-        accelerator='cpu',
+        accelerator='gpu',
         logger=False,
         max_steps=max_steps,
         max_epochs=max_epochs,
@@ -243,7 +253,7 @@ def _run_eval(tmp_path, which='not set'):
     trainer = pl.Trainer(
         strategy='ddp',
         devices=1,
-        accelerator='cpu',
+        accelerator='gpu',
         logger=False,
         callbacks=[fault_tol_cb, checkpoint_callback],
     )

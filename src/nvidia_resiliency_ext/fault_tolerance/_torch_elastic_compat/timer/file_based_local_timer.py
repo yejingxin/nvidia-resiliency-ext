@@ -4,6 +4,10 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# SPDX-License-Identifier: BSD-3-Clause
+# Modifications made by NVIDIA
+# All occurences of 'torch.distributed.elastic' were replaced with 'nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat'
+
 import io
 import json
 import logging
@@ -15,12 +19,11 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-from .api import TimerClient, TimerRequest
+from nvidia_resiliency_ext.fault_tolerance._torch_elastic_compat.timer.api import TimerClient, TimerRequest
 
 __all__ = ["FileTimerClient", "FileTimerRequest", "FileTimerServer"]
 
 log = logging.getLogger(__name__)
-
 
 class FileTimerRequest(TimerRequest):
     """
@@ -34,9 +37,7 @@ class FileTimerRequest(TimerRequest):
 
     __slots__ = ["version", "worker_pid", "scope_id", "expiration_time", "signal"]
 
-    def __init__(
-        self, worker_pid: int, scope_id: str, expiration_time: float, signal: int = 0
-    ) -> None:
+    def __init__(self, worker_pid: int, scope_id: str, expiration_time: float, signal: int = 0) -> None:
         self.version = 1
         self.worker_pid = worker_pid
         self.scope_id = scope_id
@@ -61,7 +62,7 @@ class FileTimerRequest(TimerRequest):
                 "pid": self.worker_pid,
                 "scope_id": self.scope_id,
                 "expiration_time": self.expiration_time,
-                "signal": self.signal,
+                "signal": self.signal
             },
         )
 
@@ -84,12 +85,8 @@ class FileTimerClient(TimerClient):
         signal: signal, the signal to use to kill the process. Using a
                         negative or zero signal will not kill the process.
     """
-
-    def __init__(
-        self,
-        file_path: str,
-        signal=(signal.SIGKILL if sys.platform != "win32" else signal.CTRL_C_EVENT),
-    ) -> None:  # type: ignore[attr-defined]
+    def __init__(self, file_path: str, signal=(signal.SIGKILL if sys.platform != "win32" else
+                                               signal.CTRL_C_EVENT)) -> None:  # type: ignore[attr-defined]
         super().__init__()
         self._file_path = file_path
         self.signal = signal
@@ -108,9 +105,7 @@ class FileTimerClient(TimerClient):
         # be raised if the server is not there.
         file = self._open_non_blocking()
         if file is None:
-            raise BrokenPipeError(
-                "Could not send the FileTimerRequest because FileTimerServer is not available."
-            )
+            raise BrokenPipeError("Could not send the FileTimerRequest because FileTimerServer is not available.")
         with file:
             json_request = request.to_json()
             # Write request with no greater than select.PIPE_BUF is guarantee to be atomic.
@@ -127,14 +122,17 @@ class FileTimerClient(TimerClient):
                 worker_pid=os.getpid(),
                 scope_id=scope_id,
                 expiration_time=expiration_time,
-                signal=self.signal,
+                signal=self.signal
             ),
         )
 
     def release(self, scope_id: str) -> None:
         self._send_request(
             request=FileTimerRequest(
-                worker_pid=os.getpid(), scope_id=scope_id, expiration_time=-1, signal=0
+                worker_pid=os.getpid(),
+                scope_id=scope_id,
+                expiration_time=-1,
+                signal=0
             ),
         )
 
@@ -164,7 +162,7 @@ class FileTimerServer:
         file_path: str,
         max_interval: float = 10,
         daemon: bool = True,
-        log_event: Optional[Callable[[str, Optional[FileTimerRequest]], None]] = None,
+        log_event: Optional[Callable[[str, Optional[FileTimerRequest]], None]] = None
     ) -> None:
         self._file_path = file_path
         self._max_interval = max_interval
@@ -181,12 +179,13 @@ class FileTimerServer:
         self._run_once = False
         self._log_event = log_event if log_event is not None else lambda name, request: None
 
+
     def start(self) -> None:
         log.info(
-            "Starting %s..." " max_interval=%s," " daemon=%s",
-            type(self).__name__,
-            self._max_interval,
-            self._daemon,
+            "Starting %s..."
+            " max_interval=%s,"
+            " daemon=%s",
+            type(self).__name__, self._max_interval, self._daemon
         )
         self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=self._daemon)
         log.info("Starting watchdog thread...")
@@ -230,8 +229,8 @@ class FileTimerServer:
                     self._run_watchdog(fd)
                     if run_once:
                         break
-                except Exception as e:
-                    log.error("Error running watchdog", exc_info=e)
+                except Exception:
+                    log.exception("Error running watchdog")
 
     def _run_watchdog(self, fd: io.TextIOWrapper) -> None:
         timer_requests = self._get_requests(fd, self._max_interval)
@@ -239,11 +238,7 @@ class FileTimerServer:
         now = time.time()
         reaped_worker_pids = set()
         for worker_pid, expired_timers in self.get_expired_timers(now).items():
-            log.info(
-                "Reaping worker_pid=[%s]. Expired timers: %s",
-                worker_pid,
-                self._get_scopes(expired_timers),
-            )
+            log.info("Reaping worker_pid=[%s]. Expired timers: %s", worker_pid, self._get_scopes(expired_timers))
             reaped_worker_pids.add(worker_pid)
             # In case we have multiple expired timers, we find the first timer
             # with a valid signal (>0) in the expiration time order.
@@ -293,10 +288,7 @@ class FileTimerServer:
                 signal = request["signal"]
                 requests.append(
                     FileTimerRequest(
-                        worker_pid=pid,
-                        scope_id=scope_id,
-                        expiration_time=expiration_time,
-                        signal=signal,
+                        worker_pid=pid, scope_id=scope_id, expiration_time=expiration_time, signal=signal
                     )
                 )
             now = time.time()
@@ -320,7 +312,7 @@ class FileTimerServer:
                 self._timers[key] = request
 
     def clear_timers(self, worker_pids: Set[int]) -> None:
-        for pid, scope_id in list(self._timers.keys()):
+        for (pid, scope_id) in list(self._timers.keys()):
             if pid in worker_pids:
                 del self._timers[(pid, scope_id)]
 
@@ -340,6 +332,6 @@ class FileTimerServer:
         except ProcessLookupError:
             log.info("Process with pid=%s does not exist. Skipping", worker_pid)
             return True
-        except Exception as e:
-            log.error("Error terminating pid=%s", worker_pid, exc_info=e)
+        except Exception:
+            log.exception("Error terminating pid=%s", worker_pid)
         return False
